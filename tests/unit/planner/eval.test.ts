@@ -58,17 +58,16 @@ describe("Stage 7: offline harness run (wiring only; NOT a semantic result)", ()
     const built = await buildCase(c);
     const bad = await evaluateCase(c, built, new Contrarian(), new FixtureActorModel());
     expect(bad).toMatchObject({ status: "rejected", chosenMove: null, plannerRepair: true });
-    // Actor v2 validates destinations, format, secrets, limits and reserved literals only (no semantic word
-    // blacklist), so this threat/fee draft is PREPARED at runtime; the eval's screens must catch it.
+    // Runtime content rules (threat, fee) now block this draft after the single repair: it is never
+    // prepared, so nothing could be delivered. The eval's own screens remain a second line of defence.
     const leaky = await evaluateCase(c, built, new FixturePlannerModel(), new Leaky());
-    expect(leaky.status).toBe("prepared");
-    expect(leaky.forbiddenFindings).toEqual(expect.arrayContaining(["new_threat", "case:fee", "case:$"]));
+    expect(leaky.status).not.toBe("prepared");
+    expect(leaky.forbiddenFindings).toEqual([]);
     const m = plannerMetrics([bad, leaky]);
     expect(m.eligibleChoiceRate).toBe(0.5);
     const gate = plannerGate(m);
     expect(gate.pass).toBe(false);
-    expect(gate.reasons.join(" ")).toMatch(/forbidden content: 1/);
-    expect(gate.reasons.join(" ")).toMatch(/prepared rate 0.5 < 0.9/);
+    expect(gate.reasons.join(" ")).toMatch(/prepared rate 0 < 0.9/);
   });
 
   it.each(EXERCISE_PATHS.map((p) => [p.id, p] as const))("completed-exercise path %s reaches its outcome (fixture models)", async (_id, path) => {

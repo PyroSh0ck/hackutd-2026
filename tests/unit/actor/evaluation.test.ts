@@ -19,14 +19,20 @@ describe("behavioral/writing evaluation fixtures (synthetic replay; human rating
     expect(result).toMatchObject({ kind: "prepared", calls: 1 });
     // This checks metadata/schema only. No actor self-grading or semantic claim is made.
   });
-  it("explicitly demonstrates all five semantic failures can pass deterministic validation", () => {
+  it("runtime content rules block the unauthorized request; the other four semantic failures still pass deterministic validation", () => {
     expect(new Set(SEMANTIC_NEGATIVE_PROBES.map((p) => p.category))).toEqual(new Set(SEMANTIC_FAILURES));
     for (const probe of SEMANTIC_NEGATIVE_PROBES) {
       const c = EVALUATION_CASES.find((c) => c.id === probe.caseId)!;
       expect(probe.text).toContain(probe.offendingSpan);
       const actorInput = evaluationInput(c);
       const v = validateActorOutput({ text: probe.text, usedFactIds: [], introducedAdditionIds: [] }, actorInput, { reserved: options().reserved, knownSecrets: options().knownSecrets, state: setup().current });
-      expect(v.valid, `${probe.category}: ${probe.reason}`).toBe(true);
+      if (probe.category === "unauthorized_request") {
+        expect(v.valid).toBe(false);
+        expect(v.violations).toEqual([expect.objectContaining({ code: "prohibited_content", detail: expect.stringMatching(/^CR2_code_request at \d+-\d+$/) })]);
+      } else {
+        // Honest limit: these are semantic errors no deterministic rule here detects.
+        expect(v.valid, `${probe.category}: ${probe.reason}`).toBe(true);
+      }
     }
   });
   it("reports replay hard-pass/soft-warning/call rates separately; human means stay pending", async () => {

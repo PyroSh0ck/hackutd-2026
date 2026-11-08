@@ -44,6 +44,7 @@ export type ActorDraft = z.infer<typeof ActorOutputSchema>;
 export const ActorViolationCodeSchema = z.enum([
   "schema_invalid", "blank_text", "text_too_long", "word_limit", "question_limit", "invalid_reference",
   "addition_mismatch", "unapproved_destination", "forbidden_format", "known_secret_in_output", "session_not_active", "stale_revision",
+  "prohibited_content",
 ]);
 export const ActorViolationSchema = z.strictObject({ code: ActorViolationCodeSchema, field: z.string(), detail: z.string(), offendingExcerpt: z.string().nullable() });
 export type ActorViolation = z.infer<typeof ActorViolationSchema>;

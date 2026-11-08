@@ -78,7 +78,9 @@ describe("pure actor output validation", () => {
     ctx.state.stage = "verifying"; expect(validateActorOutput(output(), input(), ctx).violations.map((v) => v.code)).toContain("session_not_active");
   });
   it("does not pretend deterministic metadata proves semantic fidelity", () => {
-    // Unauthorized request despite the verification target: deliberately passes structural checks.
-    expect(check("Please share the practice code.").valid).toBe(true);
+    // An invented completed user action is a semantic error that structural checks still pass.
+    expect(check("You have already completed independent verification.").valid).toBe(true);
+    // An unauthorized code request on a non-request move is now caught by the content rules.
+    expect(check("Please share the practice code.").violations.map((v) => v.code)).toEqual(["prohibited_content"]);
   });
 });

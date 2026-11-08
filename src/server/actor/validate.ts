@@ -1,4 +1,5 @@
 import { ActorOutputSchema as SharedOutputSchema, type ActorOutput, type PlannerAddition } from "@/contracts/planner";
+import { contentViolations, type ContentPolicy } from "./content-rules";
 import { hardWordLimit, questionCount, wordCount } from "./counts";
 import { ActorOutputSchema, type ActorInput, type ActorValidation, type ActorViolation } from "./schemas";
 
@@ -8,6 +9,16 @@ export type ActorValidationContext = {
   knownSecrets: readonly string[];
   state: ActorGate;
 };
+/**
+ * Scenario/candidate content permissions. The fraud scenario may ask for the practice code only on a
+ * move that presents or targets the request; nothing may ask for credentials, payment, or new sensitive
+ * data, or threaten the user.
+ */
+export function contentPolicyFor(input: ActorInput): ContentPolicy {
+  const i = input.instruction;
+  return { allowCodeRequest: input.persona.scenarioId === "mobile-code-01" && (i.toolIntent === "present_practice_code_request" || i.target.requestId !== null) };
+}
+
 export type ValidatedActorOutput = ActorValidation & { output: ActorOutput | null };
 
 export function gateViolations(state: ActorGate, revision: number): ActorViolation[] {
@@ -64,6 +75,8 @@ export function validateActorOutput(raw: unknown, input: ActorInput, ctx: ActorV
   const numericText = text.split("").map((char, index) => numericSpans.some(([start, end]) => index >= start && index < end) ? " " : char).join("").normalize("NFKC");
   if (/(?:\+?\d[\d\s().-]{3,}\d)/u.test(numericText) || /\b\d{4,}\b/u.test(numericText)) add("unapproved_destination", "text", "Phone-like numeric destinations are not allowed.");
   if (ctx.knownSecrets.some((secret) => secret && text.includes(secret))) add("known_secret_in_output", "text", "[redacted known secret]");
+  // Content permissions: rule id and exact span go to the private actor audit (excerpt of the demand only).
+  for (const v of contentViolations(text, contentPolicyFor(input))) violations.push({ code: "prohibited_content", field: "text", detail: `${v.ruleId} at ${v.span[0]}-${v.span[1]}`, offendingExcerpt: v.excerpt });
   violations.push(...gateViolations(ctx.state, i.basedOnRevision));
   return { valid: violations.length === 0, violations, output: violations.length ? null : SharedOutputSchema.parse(out) };
 }
