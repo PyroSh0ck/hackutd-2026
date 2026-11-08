@@ -5,7 +5,8 @@ import { PlanRecordSchema, type PlanRecord } from "@/contracts/planner";
 import type { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/server/db";
 import { upgradeAssessmentRecord } from "../history";
-import type { AdditionRow, AppendResult, ApplyResult, CommitResult, InputChange, IssueChanges, IssueRow, ObserverStore, PlanCommit, Receipt, SessionRow, Snapshot } from "./types";
+import { summaryOf, type SessionSummary } from "@/server/engine/history";
+import type { AdditionRow, AppendResult, ApplyResult, CommitResult, EventRow, InputChange, IssueChanges, IssueRow, ObserverStore, PlanCommit, Receipt, SessionRow, Snapshot } from "./types";
 
 /**
  * Postgres (Neon) session store. Every write is one short transaction; none spans a model call.
@@ -76,6 +77,21 @@ export class PrismaObserverStore implements ObserverStore {
       });
       await writeRows(tx, session.id, change);
     });
+  }
+
+  async listSessions(ownerKey: string): Promise<SessionSummary[]> {
+    const rows = await prisma.observerSession.findMany({
+      where: { ownerKey },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: 500,
+      select: { id: true, scenarioId: true, scenarioVersion: true, createdAt: true, ended: true, stage: true, outcome: true, turn: true, events: { select: { type: true, createdAt: true }, orderBy: { seq: "asc" } } },
+    });
+    return rows.map((r) =>
+      summaryOf(
+        { id: r.id, scenarioId: r.scenarioId, scenarioVersion: r.scenarioVersion, createdAt: r.createdAt.toISOString(), ended: r.ended, stage: r.stage as SessionSummary["stage"], outcome: r.outcome as SessionSummary["outcome"], turn: r.turn },
+        r.events.map((e) => ({ type: e.type as EventRow["type"], createdAt: e.createdAt.toISOString() })),
+      ),
+    );
   }
 
   async load(sessionId: string): Promise<Snapshot | null> {

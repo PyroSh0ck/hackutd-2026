@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { AssessmentRecord, SubmitEventRequest } from "@/contracts/observer";
 import type { PlanRecord } from "@/contracts/planner";
 import type { ApplyResult, Snapshot } from "@/server/observer/store/types";
+import type { SessionSummary } from "./history";
 import type { CommitPreparedResult, EventResult, MessageResult, RetryResult, TrainingBackend } from "./backend";
 
 /**
@@ -79,6 +80,10 @@ export class SpacetimeBackend implements TrainingBackend {
   async load(sessionId: string): Promise<Snapshot | null> {
     const r = await this.call<{ snapshot: Snapshot }>("loadSession", { sessionId });
     return r.found ? r.value.snapshot : null;
+  }
+
+  async listSessions(ownerKey: string) {
+    return this.must<SessionSummary[]>("listSessions", { ownerKey });
   }
 
   async createSession(ownerKey: string) {

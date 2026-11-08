@@ -1,6 +1,7 @@
 "use client";
 
 import { ObserverSessionResponseSchema, type ClientEventType, type ObserverSessionResponse, type ObserverSessionView } from "@/contracts/observer";
+import { HistoryResponseSchema, ProgressResponseSchema } from "@/contracts/history";
 import { ReferenceDirectoryResponseSchema } from "@/contracts/reference";
 import { apiRequest } from "@/lib/api-client";
 
@@ -9,8 +10,8 @@ import { apiRequest } from "@/lib/api-client";
  * is the only source of truth for session state, outcomes and allowed actions; the browser remembers only
  * session ids so it can resume the current practice and list this viewer's past sessions.
  *
- * Missing backend contract: there is no "list my sessions" endpoint. Case history is therefore built from
- * the ids this browser started, each re-read from `GET /api/observer/sessions/:id` (which enforces ownership).
+ * History and progress come from the server (owner = signed player cookie). The browser keeps only the
+ * current session id, as a convenience for resuming.
  */
 
 const base = "/api/observer/sessions";
@@ -35,6 +36,8 @@ export const scamperApi = {
         ...(extra.linkedIssueId ? { linkedIssueId: extra.linkedIssueId } : {}),
       },
     }),
+  history: (cursor?: string) => apiRequest(`${base}?limit=20${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, HistoryResponseSchema),
+  progress: () => apiRequest("/api/observer/progress", ProgressResponseSchema),
   directory: () => apiRequest("/api/observer/reference-directory", ReferenceDirectoryResponseSchema),
   retry: (id: string) => apiRequest(`${base}/${id}/retry`, ObserverSessionResponseSchema, { method: "POST", body: { idempotencyKey: key() } }),
 };

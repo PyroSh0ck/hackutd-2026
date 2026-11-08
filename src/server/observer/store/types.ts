@@ -1,3 +1,4 @@
+import type { SessionSummary } from "@/server/engine/history";
 import type { AppEvent, AssessmentRecord, IssueRecord, Message, Outcome, SessionStage, SimulatedRequest } from "@/contracts/observer";
 import type { PlanRecord } from "@/contracts/planner";
 
@@ -103,6 +104,8 @@ export type ApplyResult = "applied" | "stale" | "duplicate";
 export type CommitResult = "committed" | "stale" | "duplicate";
 
 export interface ObserverStore {
+  /** Owner's sessions as summaries (newest first, bounded). Ownership is the filter, never a client hint. */
+  listSessions(ownerKey: string): Promise<SessionSummary[]>;
   createSession(session: Omit<SessionRow, "claim">, change: InputChange): Promise<void>;
   load(sessionId: string): Promise<Snapshot | null>;
   findReceipt(sessionId: string, key: string): Promise<Receipt | null>;

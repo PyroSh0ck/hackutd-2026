@@ -29,6 +29,7 @@ import {
 } from '@/server/engine/commands';
 import type { Env } from '@/server/engine/decide';
 import { snapshotOf, type SessionData } from '@/server/engine/ops';
+import { compareSummaries, summaryOf } from '@/server/engine/history';
 import { MOBILE_CODE_SCENARIO } from '@/server/planner/scenario';
 
 // ---------------------------------------------------------------------------------------------- tables
@@ -128,7 +129,11 @@ const practiceProgress = table(
   }
 );
 
+/** Monotonic id sequence: makes every generated id unique across transactions (ctx.random is deterministic). */
+const idSequence = table({ name: 'id_sequence' }, { id: t.u32().primaryKey(), next: t.u64() });
+
 const spacetimedb = schema({
+  idSequence,
   worker,
   trainingSession,
   message,
@@ -169,12 +174,32 @@ export const revokeWorker = spacetimedb.reducer({ worker: t.identity() }, (ctx, 
 
 // ---------------------------------------------------------------------------------------------- environment
 
+const idState = new WeakMap<object, { next: bigint }>();
+
+/**
+ * UUID-shaped ids: 56 bits from the module's persistent sequence (unique by construction) plus random
+ * bits. `ctx.random` alone is deterministic per transaction seed, so it cannot guarantee uniqueness.
+ */
 function uuid(tx: Tx): string {
+  let state = idState.get(tx);
+  if (!state) {
+    state = { next: tx.db.idSequence.id.find(0)?.next ?? 1n };
+    idState.set(tx, state);
+  }
+  const n = state.next++;
   const b = tx.random.fill(new Uint8Array(16));
+  for (let i = 0; i < 7; i++) b[9 + i] = Number((n >> BigInt(48 - 8 * i)) & 0xffn);
   b[6] = (b[6] & 0x0f) | 0x40;
   b[8] = (b[8] & 0x3f) | 0x80;
   const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+function flushIds(tx: Tx) {
+  const state = idState.get(tx);
+  if (!state) return;
+  if (tx.db.idSequence.id.find(0)) tx.db.idSequence.id.update({ id: 0, next: state.next });
+  else tx.db.idSequence.insert({ id: 0, next: state.next });
 }
 
 const dateOf = (tx: Tx) => new Date(Number(tx.timestamp.microsSinceUnixEpoch / 1000n));
@@ -346,7 +371,9 @@ function run(ctx: Proc, body: (tx: Tx) => Result): string {
     return JSON.stringify(
       ctx.withTx((tx) => {
         if (!tx.db.worker.identity.find(ctx.sender)) return { ok: false, error: 'unauthorized', detail: 'caller is not an authorized worker' } as Result;
-        return body(tx);
+        const result = body(tx);
+        flushIds(tx);
+        return result;
       })
     );
   } catch (error) {
@@ -469,6 +496,22 @@ export const recordAgentFailure = spacetimedb.procedure(
     if (a.attempt !== 1 && a.attempt !== 2) return JSON.stringify(invalid('attempt must be 1 or 2'));
     return withSession(ctx, a.sessionId, (data, tx) => cmdRecordTechnicalFailure(data, parsed.data, a.inputId, a.attempt as 1 | 2, envOf(tx)));
   }
+);
+
+/** The owner's sessions as summaries, from the module's own tables (owner index). */
+export const listSessions = spacetimedb.procedure({ ownerKey: t.string() }, t.string(), (ctx, { ownerKey }) =>
+  run(ctx, (tx) => {
+    const summaries = [...tx.db.trainingSession.ownerKey.filter(ownerKey)]
+      .map((s) =>
+        summaryOf(
+          { id: s.id, scenarioId: s.scenarioId, scenarioVersion: s.scenarioVersion, createdAt: s.createdAt, ended: s.ended, stage: s.stage as SessionData['session']['stage'], outcome: nul(s.outcome) as SessionData['session']['outcome'], turn: s.turn },
+          bySeq(tx.db.trainingEvent.sessionId.filter(s.id)).map((e) => ({ type: e.type as SessionData['events'][number]['type'], createdAt: e.createdAt }))
+        )
+      )
+      .sort(compareSummaries)
+      .slice(0, 500);
+    return { ok: true, result: summaries };
+  })
 );
 
 export const getProgress = spacetimedb.procedure({ ownerKey: t.string() }, t.string(), (ctx, { ownerKey }) =>

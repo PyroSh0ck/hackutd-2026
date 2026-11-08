@@ -151,6 +151,16 @@ describe.skipIf(!config)("SpacetimeDB training module (live local server)", () =
     expect(record.committedMessageId).toBe(v.requests.at(-1)!.introducedByMessageId);
   });
 
+  it("history and progress come from the module, owner-scoped", async () => {
+    const other = `anon:spacetime-other-${randomUUID()}`;
+    const mine = (await service.createSession(OWNER)).session.sessionId;
+    await service.createSession(other);
+    const list = await service.history(OWNER, 50, undefined);
+    expect(list.sessions.some((s) => s.sessionId === mine)).toBe(true);
+    expect((await service.history(other, 50, undefined)).sessions.some((s) => s.sessionId === mine)).toBe(false);
+    expect((await service.progress(OWNER)).completed).toBeGreaterThanOrEqual(1);
+  });
+
   it("SpacetimeDB is essential: when it is unreachable no training transition happens (no Postgres fallback)", async () => {
     const down = serviceWith(new SpacetimeBackend({ ...config!, url: "http://127.0.0.1:9" }));
     await expect(down.createSession(OWNER)).rejects.toBeInstanceOf(SpacetimeUnavailableError);

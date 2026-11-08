@@ -11,6 +11,8 @@ import {
   type SubmitMessageRequest,
 } from "@/contracts/observer";
 import type { ExplainResponse } from "@/contracts/explain";
+import type { HistoryResponse, ProgressResponse } from "@/contracts/history";
+import { pageOf, progressOf, type Cursor } from "@/server/engine/history";
 import type { Eligibility, PlanRecord } from "@/contracts/planner";
 import { HttpError, NotFoundError } from "@/server/http/errors";
 import { derivePlanningContext, triggerOf } from "@/server/planner/context";
@@ -247,6 +249,30 @@ export class ObserverService {
       outcomeEventIds: s.events.filter((e) => e.revision === outcomeRevision).map((e) => e.id),
       turns,
     };
+  }
+
+  /** Owner-scoped history from the authoritative backend, newest first, with an opaque cursor. */
+  async history(ownerKey: string, limit: number, cursor: string | undefined): Promise<HistoryResponse> {
+    let decoded: Cursor | null = null;
+    if (cursor) {
+      try {
+        const c = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Cursor;
+        if (typeof c?.createdAt !== "string" || typeof c?.id !== "string") throw new Error("bad cursor");
+        decoded = c;
+      } catch {
+        throw new HttpError(422, "VALIDATION_ERROR", "Invalid cursor.");
+      }
+    }
+    const { items, next } = pageOf(await this.backend.listSessions(ownerKey), limit, decoded);
+    return {
+      sessions: items.map((s) => ({ sessionId: s.id, title: "An account message", createdAt: s.createdAt, endedAt: s.endedAt, ended: s.ended, stage: s.stage, outcome: s.outcome, turn: s.turn })),
+      nextCursor: next ? Buffer.from(JSON.stringify(next)).toString("base64url") : null,
+    };
+  }
+
+  async progress(ownerKey: string): Promise<ProgressResponse> {
+    const p = progressOf(await this.backend.listSessions(ownerKey));
+    return { completed: p.completed, outcomes: p.outcomes, observations: p.observations, nextPractice: { available: true, selection: p.completed > 0 ? "recommended" : "mixed" } };
   }
 
   /** The planner handoff and the current deterministic eligibility (no model call). */

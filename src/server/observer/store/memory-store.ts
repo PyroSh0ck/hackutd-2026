@@ -1,6 +1,7 @@
 import type { AssessmentRecord } from "@/contracts/observer";
 import type { PlanRecord } from "@/contracts/planner";
 import { appendOp, applyAssessmentOp, claimOp, commitPlanOp, emptyData, findReceipt, releaseOp, savePlanOp, snapshotOf, writeChange, type SessionData } from "@/server/engine/ops";
+import { compareSummaries, summaryOf, type SessionSummary } from "@/server/engine/history";
 import type { AppendResult, ApplyResult, CommitResult, InputChange, IssueChanges, ObserverStore, PlanCommit, SessionRow, Snapshot } from "./types";
 
 /**
@@ -29,6 +30,14 @@ export class MemoryObserverStore implements ObserverStore {
     const data = emptyData(session);
     writeChange(data, this.clone(change));
     this.sessions.set(session.id, data);
+  }
+
+  async listSessions(ownerKey: string): Promise<SessionSummary[]> {
+    return [...this.sessions.values()]
+      .filter((d) => d.session.ownerKey === ownerKey)
+      .map((d) => summaryOf(d.session, d.events))
+      .sort(compareSummaries)
+      .slice(0, 500);
   }
 
   async load(sessionId: string): Promise<Snapshot | null> {

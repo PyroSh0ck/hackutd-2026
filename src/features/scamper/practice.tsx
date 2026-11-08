@@ -8,7 +8,7 @@ import type { ClientEventType, Message, ObserverSessionView } from "@/contracts/
 import type { ReferenceDirectoryResponse } from "@/contracts/reference";
 import { errorMessage } from "@/lib/api-client";
 import { newer, scamperApi, sessionIndex, type EventExtra } from "./adapter";
-import { OUTCOME, startedAt, time } from "./labels";
+import { OUTCOME, time } from "./labels";
 import { Mascot } from "./mascot";
 import { Badge, InlineError } from "./ui";
 import s from "./scamper.module.css";
@@ -75,7 +75,6 @@ export function PracticeWorkspace() {
     try {
       const { session } = await scamperApi.start();
       sessionIndex.setCurrent(session.sessionId);
-      sessionIndex.add(session.sessionId, startedAt(session));
       setView(session);
       setPhase({ kind: "session" });
     } catch (e) {

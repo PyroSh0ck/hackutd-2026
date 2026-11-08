@@ -3,18 +3,29 @@
 import Link from "next/link";
 import { MessageCircle } from "lucide-react";
 import type { Outcome } from "@/contracts/observer";
-import { useSessionHistory, SessionStatus } from "./history";
-import { dateTime, OUTCOME } from "./labels";
+import { useEffect, useState } from "react";
+import type { ProgressResponse } from "@/contracts/history";
+import { scamperApi } from "./adapter";
+import { SessionList, useSessionHistory } from "./history";
+import { OUTCOME } from "./labels";
 import { Mascot } from "./mascot";
 import { InlineError } from "./ui";
 import s from "./scamper.module.css";
 
 /** Home: welcome, start card, and a summary computed only from sessions the server actually returned. */
 export function HomeSummary() {
-  const { entries, reload } = useSessionHistory();
-  const loaded = entries?.flatMap((e) => (e.status === "ok" ? [e] : [])) ?? [];
-  const completed = loaded.filter((e) => e.view.ended && e.view.outcome);
-  const counts = completed.reduce<Partial<Record<Outcome, number>>>((acc, e) => ({ ...acc, [e.view.outcome!]: (acc[e.view.outcome!] ?? 0) + 1 }), {});
+  const { state, reload } = useSessionHistory();
+  const [progress, setProgress] = useState<ProgressResponse | null>(null);
+  useEffect(() => {
+    let alive = true;
+    scamperApi.progress().then(
+      (p) => alive && setProgress(p),
+      () => undefined,
+    );
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   return (
     <main className={s.page}>
@@ -41,38 +52,30 @@ export function HomeSummary() {
 
       <section className={s.stack} aria-label="Your recent sessions">
         <h2 className={s.subtitle}>Your sessions</h2>
-        {!entries ? (
+        {state.kind === "loading" && (
           <p className={s.muted} role="status">
             Loading…
           </p>
-        ) : loaded.length === 0 ? (
-          <p className={s.muted}>No practice sessions yet. Your completed sessions will show up here.</p>
-        ) : (
+        )}
+        {state.kind === "error" && <InlineError message={state.message} onRetry={reload} />}
+        {state.kind === "ready" && state.sessions.length === 0 && <p className={s.muted}>No practice sessions yet. Your completed sessions will show up here.</p>}
+        {state.kind === "ready" && state.sessions.length > 0 && (
           <>
-            {entries.some((e) => e.status === "error") && <InlineError message="Some sessions could not be loaded." onRetry={reload} />}
-            <dl className={s.facts}>
-              <dt>Completed sessions</dt>
-              <dd>{completed.length}</dd>
-              {(Object.keys(counts) as Outcome[]).map((o) => (
-                <div key={o} style={{ display: "contents" }}>
-                  <dt>{OUTCOME[o].label}</dt>
-                  <dd>{counts[o]}</dd>
-                </div>
-              ))}
-            </dl>
-            <ul className={s.list}>
-              {loaded.slice(0, 3).map((e) => (
-                <li key={e.id} className={s.listItem}>
-                  <span className={s.stack}>
-                    <strong>Practice · {dateTime(e.startedAt)}</strong>
-                    <SessionStatus view={e.view} />
-                  </span>
-                  <Link className={s.button} data-variant="secondary" href={e.view.ended ? `/scamper/history/${e.id}` : "/scamper/practice"}>
-                    {e.view.ended ? "Open review" : "Continue"}
-                  </Link>
-                </li>
-              ))}
-            </ul>
+            {progress && (
+              <dl className={s.facts}>
+                <dt>Completed sessions</dt>
+                <dd>{progress.completed}</dd>
+                {(Object.keys(progress.outcomes) as Outcome[]).map((o) => (
+                  <div key={o} style={{ display: "contents" }}>
+                    <dt>{OUTCOME[o].label}</dt>
+                    <dd>{progress.outcomes[o]}</dd>
+                  </div>
+                ))}
+                <dt>Checked with official support</dt>
+                <dd>{progress.observations.verificationCompleted}</dd>
+              </dl>
+            )}
+            <SessionList sessions={state.sessions.slice(0, 3)} />
           </>
         )}
       </section>

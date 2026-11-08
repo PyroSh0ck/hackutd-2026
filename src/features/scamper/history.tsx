@@ -3,62 +3,84 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { Folder } from "lucide-react";
+import type { PublicSessionSummary } from "@/contracts/history";
 import type { ObserverSessionView } from "@/contracts/observer";
 import { errorMessage } from "@/lib/api-client";
-import { scamperApi, sessionIndex, type IndexedSession } from "./adapter";
+import { scamperApi } from "./adapter";
 import { dateTime, OUTCOME } from "./labels";
 import { Badge, InlineError } from "./ui";
 import s from "./scamper.module.css";
 
-export type HistoryEntry = IndexedSession & ({ status: "ok"; view: ObserverSessionView } | { status: "missing" } | { status: "error"; message: string });
+type HistoryState = { kind: "loading" } | { kind: "error"; message: string } | { kind: "ready"; sessions: PublicSessionSummary[]; nextCursor: string | null; loadingMore: boolean };
 
-/** Sessions this browser started, each re-read from the server (which enforces ownership). */
+/** Server-side history for this player (survives clearing browser storage while the cookie persists). */
 export function useSessionHistory() {
-  const [entries, setEntries] = useState<HistoryEntry[]>();
-  const load = useCallback(async () => {
-    const index = sessionIndex.list();
-    const results = await Promise.allSettled(index.map((i) => scamperApi.load(i.id)));
-    return index.map((i, n): HistoryEntry => {
-      const r = results[n];
-      if (r.status === "fulfilled") return { ...i, status: "ok", view: r.value.session };
-      const status = (r.reason as { status?: number })?.status;
-      return status === 404 ? { ...i, status: "missing" } : { ...i, status: "error", message: errorMessage(r.reason, "Could not load this session.") };
-    });
-  }, []);
-  const reload = useCallback(() => {
-    setEntries(undefined);
-    void load().then(setEntries);
-  }, [load]);
+  const [state, setState] = useState<HistoryState>({ kind: "loading" });
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let alive = true;
-    void load().then((e) => {
-      if (alive) setEntries(e);
-    });
+    scamperApi.history().then(
+      (r) => alive && setState({ kind: "ready", sessions: r.sessions, nextCursor: r.nextCursor, loadingMore: false }),
+      (e) => alive && setState({ kind: "error", message: errorMessage(e, "Could not load your practice history.") }),
+    );
     return () => {
       alive = false;
     };
-  }, [load]);
-  return { entries, reload };
+  }, [attempt]);
+  const reload = useCallback(() => {
+    setState({ kind: "loading" });
+    setAttempt((a) => a + 1);
+  }, []);
+  const more = useCallback(() => {
+    if (state.kind !== "ready" || !state.nextCursor || state.loadingMore) return;
+    setState({ ...state, loadingMore: true });
+    scamperApi.history(state.nextCursor).then(
+      (r) => setState({ kind: "ready", sessions: [...state.sessions, ...r.sessions], nextCursor: r.nextCursor, loadingMore: false }),
+      (e) => setState({ kind: "error", message: errorMessage(e, "Could not load more sessions.") }),
+    );
+  }, [state]);
+  return { state, reload, more };
 }
 
-export function SessionStatus({ view }: { view: ObserverSessionView }) {
+export function SessionStatus({ view }: { view: Pick<ObserverSessionView, "outcome"> }) {
   if (!view.outcome) return <Badge tone="neutral">In progress</Badge>;
   const o = OUTCOME[view.outcome];
   return <Badge tone={o.tone}>{o.label}</Badge>;
 }
 
+export function SessionList({ sessions }: { sessions: PublicSessionSummary[] }) {
+  return (
+    <ul className={s.list}>
+      {sessions.map((e) => (
+        <li key={e.sessionId} className={s.listItem}>
+          <span className={s.stack}>
+            <strong>
+              {e.title} · {dateTime(e.createdAt)}
+            </strong>
+            <SessionStatus view={e} />
+          </span>
+          <Link className={s.button} data-variant="secondary" href={e.ended ? `/scamper/history/${e.sessionId}` : "/scamper/practice"}>
+            {e.ended ? "Open review" : "Continue"}
+          </Link>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export function CaseHistory() {
-  const { entries, reload } = useSessionHistory();
-  const visible = entries?.filter((e) => e.status !== "missing");
+  const { state, reload, more } = useSessionHistory();
   return (
     <main className={s.page}>
       <h1 className={s.title}>Case history</h1>
-      <p className={s.lede}>Practice sessions started in this browser. Open one to see its review.</p>
-      {!visible ? (
+      <p className={s.lede}>Your practice sessions on this device. Open one to see its review.</p>
+      {state.kind === "loading" && (
         <p className={s.muted} role="status">
           Loading your sessions…
         </p>
-      ) : visible.length === 0 ? (
+      )}
+      {state.kind === "error" && <InlineError message={state.message} onRetry={reload} />}
+      {state.kind === "ready" && state.sessions.length === 0 && (
         <div className={s.softCard}>
           <h2 className={s.cardTitle}>
             <Folder size={20} className={s.iconAccent} aria-hidden />
@@ -71,24 +93,17 @@ export function CaseHistory() {
             </Link>
           </div>
         </div>
-      ) : (
+      )}
+      {state.kind === "ready" && state.sessions.length > 0 && (
         <>
-          {visible.some((e) => e.status === "error") && <InlineError message="Some sessions could not be loaded." onRetry={reload} />}
-          <ul className={s.list}>
-            {visible.map((e) => (
-              <li key={e.id} className={s.listItem}>
-                <span className={s.stack}>
-                  <strong>Practice · {dateTime(e.startedAt)}</strong>
-                  {e.status === "ok" ? <SessionStatus view={e.view} /> : <span className={s.muted}>{e.status === "error" ? e.message : ""}</span>}
-                </span>
-                {e.status === "ok" && (
-                  <Link className={s.button} data-variant="secondary" href={e.view.ended ? `/scamper/history/${e.id}` : "/scamper/practice"}>
-                    {e.view.ended ? "Open review" : "Continue"}
-                  </Link>
-                )}
-              </li>
-            ))}
-          </ul>
+          <SessionList sessions={state.sessions} />
+          {state.nextCursor && (
+            <div className={s.row}>
+              <button type="button" className={s.button} data-variant="secondary" onClick={more} disabled={state.loadingMore}>
+                {state.loadingMore ? "Loading…" : "Show more"}
+              </button>
+            </div>
+          )}
         </>
       )}
     </main>

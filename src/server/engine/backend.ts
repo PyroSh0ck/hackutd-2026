@@ -3,6 +3,7 @@ import type { PlanRecord } from "@/contracts/planner";
 import { secureRandom, type ScenarioDefinition } from "@/server/planner/scenario";
 import type { StopIntent } from "@/server/planner/stop-intent";
 import type { ApplyResult, CommitResult, InputChange, ObserverStore, Receipt, Snapshot } from "@/server/observer/store/types";
+import type { SessionSummary } from "./history";
 import { decideAfterEnd, decideCommit, decideCreate, decideEvent, decideIssues, decideMessage, decideRetry, decideTechnicalFailure, decideTurnLimit, type Env, type Rejection } from "./decide";
 
 /**
@@ -25,6 +26,8 @@ export type CommitPreparedResult = { kind: CommitResult; messageId: string | nul
 export interface TrainingBackend {
   readonly name: "postgres" | "memory" | "spacetime";
   load(sessionId: string): Promise<Snapshot | null>;
+  /** The owner's sessions from the authoritative backend (never from browser storage). */
+  listSessions(ownerKey: string): Promise<SessionSummary[]>;
   createSession(ownerKey: string): Promise<string>;
   submitMessage(sessionId: string, input: { key: string; content: string; payloadHash: string }): Promise<MessageResult>;
   submitEvent(sessionId: string, request: SubmitEventRequest, payloadHash: string): Promise<EventResult>;
@@ -62,6 +65,10 @@ export class StoreBackend implements TrainingBackend {
 
   load(sessionId: string) {
     return this.store.load(sessionId);
+  }
+
+  listSessions(ownerKey: string) {
+    return this.store.listSessions(ownerKey);
   }
 
   /** CAS append with a bounded re-read loop; `build` may return a rejection to abort without writing. */
