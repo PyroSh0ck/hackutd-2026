@@ -5,12 +5,16 @@ import type { StructuredModel, StructuredRequest, StructuredResult } from "@/ser
  * TEST-ONLY deterministic planner and actor (selected only when E2E_TEST=1 AND OBSERVER_MODEL_MODE=fixture).
  * They prove wiring and boundaries over HTTP/E2E, not model quality; real behavior is measured by
  * `pnpm planner:eval`. Failure hooks: a user message containing "[[planner-fail]]" makes every planner
- * call time out; "[[planner-fail-once]]" fails only the first processing attempt for that message.
+ * call time out; "[[planner-fail-once]]" fails only the first processing attempt for that message;
+ * "[[slow]]" holds the planner call for SLOW_FIXTURE_MS (to exercise stop-while-generating).
  */
 
 const payload = (request: StructuredRequest) => JSON.parse(request.user.slice(request.user.indexOf("\n") + 1));
 const PRIORITY: Candidate["moveId"][] = ["answer_identity", "answer_procedure", "answer_scenario_fact", "address_doubt", "clarify_condition", "clarify_decision", "clarify_claimed_check", "acknowledge_refusal", "present_code_request", "continue_premise"];
 const failedOnce = new Set<string>();
+
+/** Test-only hold for "[[slow]]" inputs. */
+export const SLOW_FIXTURE_MS = 4000;
 
 export class FixturePlannerModel implements StructuredModel {
   constructor(readonly modelId = "fixture-planner") {}
@@ -20,6 +24,7 @@ export class FixturePlannerModel implements StructuredModel {
       conversationUntrustedData: Array<{ id: string; role: string; content: string }>;
     };
     const latest = [...input.conversationUntrustedData].reverse().find((m) => m.role === "user");
+    if (latest?.content.includes("[[slow]]")) await new Promise((r) => setTimeout(r, SLOW_FIXTURE_MS));
     if (latest?.content.includes("[[planner-fail]]")) return { ok: false, failure: "timeout", detail: "fixture timeout" };
     if (latest?.content.includes("[[planner-fail-once]]") && !failedOnce.has(latest.id)) {
       failedOnce.add(latest.id);

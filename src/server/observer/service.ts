@@ -562,6 +562,14 @@ export class ObserverService {
     try {
       assembled = assembleActor(await fresh(), binding);
     } catch (error) {
+      // The session moved on (stop, verification, new input) before the actor started: that is a stale
+      // turn, not a technical failure. Only a genuinely unbuildable input on a current session fails.
+      const now = await fresh();
+      if (now.session.ended || now.session.stage !== "active" || now.session.revision !== record.basedOnRevision) {
+        await this.backend.savePlan({ ...record, status: "stale" });
+        this.emit(sessionId, { inputId, step: "actor.input", agent: "actor", title: "Session changed before the actor ran: turn discarded (stale)", status: "warn", data: { stage: now.session.stage, ended: now.session.ended } });
+        return stale("the session changed before the actor ran");
+      }
       this.emit(sessionId, { inputId, step: "actor.input", agent: "actor", title: "Actor input could not be assembled", status: "fail", data: { error: error instanceof Error ? error.message : String(error) } });
       return failed({ ...record, status: "failed", failureReason: "actor_input_invalid" }, "actor input could not be assembled");
     }

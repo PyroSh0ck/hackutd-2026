@@ -141,3 +141,28 @@ test("B20: history is server-side; it survives clearing browser storage while th
   await page.goto("/scamper/history");
   await expect(page.getByText("Safely disengaged").filter({ visible: true }).first()).toBeVisible();
 });
+
+test("stop while generation is pending: End practice wins; the late reply is never shown", async ({ page }) => {
+  await begin(page);
+  const box = page.getByRole("textbox", { name: "Message" });
+  await box.fill("[[slow]] Who are you?");
+  const sent = page.waitForResponse((r) => r.url().endsWith("/messages") && r.request().method() === "POST");
+  const startedAt = Date.now();
+  await box.press("Enter");
+  // Typing dots are only shown while the real request is running.
+  await expect(page.getByText(/is replying/)).toBeAttached();
+  // Let the observer finish so the stop lands while the (held) planner/actor generation is in flight.
+  await page.waitForTimeout(1500);
+  await page.getByRole("button", { name: "End practice" }).click();
+  await expect(page.getByText("Safely disengaged").first()).toBeVisible();
+  await sent; // the held generation finishes after the stop
+  expect(Date.now() - startedAt).toBeGreaterThanOrEqual(3500); // the hold really happened (planner was running)
+  await page.waitForTimeout(500);
+  const transcript = page.getByRole("list", { name: "Conversation transcript" });
+  await expect(transcript.getByText(/Avery with Cedar Account Support/)).toHaveCount(0); // no late answer
+  await expect(page.getByText("Safely disengaged").first()).toBeVisible();
+  // And after a reload the server state agrees: ended, opening message only from the opponent.
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Review your last practice" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Review your last practice" })).toBeVisible();
+});

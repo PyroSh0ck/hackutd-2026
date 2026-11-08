@@ -1,7 +1,7 @@
 import type { PlannerInput } from "@/contracts/planner";
 import { plannerUserPrompt } from "../prompts";
 import type { ChatMessage, ToolChatModel, ToolChatResult, ToolSpec } from "../tool-model";
-import { FixturePlannerModel } from "./fixture-models";
+import { FixturePlannerModel, SLOW_FIXTURE_MS } from "./fixture-models";
 
 /**
  * LABELED TEST FIXTURE: a deterministic stand-in for a function-calling Nemotron planner. It follows the
@@ -9,6 +9,7 @@ import { FixturePlannerModel } from "./fixture-models";
  * same plan as FixturePlannerModel. Hooks in the latest user message:
  *   [[tool-bad-args]]  first move uses an ineligible candidate id, then repairs once
  *   [[tool-no-call]]   answers in prose without calling a tool
+ *   [[slow]]           holds the move decision for SLOW_FIXTURE_MS (stop-while-generating tests)
  * Never used outside E2E_TEST=1 + OBSERVER_MODEL_MODE=fixture or unit tests.
  */
 export class FixtureToolPlannerModel implements ToolChatModel {
@@ -21,6 +22,7 @@ export class FixtureToolPlannerModel implements ToolChatModel {
     if (toolResults.length === 0) return call("get_training_context", {});
     const context = JSON.parse(toolResults[0].content) as PlannerInput;
     const text = JSON.stringify(context);
+    if (text.includes("[[slow]]")) await new Promise((r) => setTimeout(r, SLOW_FIXTURE_MS));
     if (text.includes("[[tool-no-call]]")) return { ok: true, content: "I think we should continue.", toolCalls: [], protocol: "native" };
     const planned = await new FixturePlannerModel().generate({ stage: "planner", schemaName: "submit_plan", schemaDescription: "", jsonSchema: {}, system: "", user: plannerUserPrompt(context), timeoutMs: 1000 });
     if (!planned.ok) return { ok: false, failure: planned.failure === "malformed_output" ? "malformed_output" : planned.failure, detail: planned.detail };
