@@ -29,6 +29,7 @@
     "spacetime:publish:maincloud": "spacetime publish cybersleuth-db --server maincloud --module-path ./spacetime",
     "spacetime:setup:maincloud": "SPACETIME_URL=https://maincloud.spacetimedb.com SPACETIME_DATABASE=cybersleuth-db SPACETIME_SERVER=maincloud SPACETIME_WORKER_FILE=.spacetime/maincloud.json tsx scripts/spacetime-setup.ts",
     "spacetime:typecheck": "tsc --noEmit -p spacetime/tsconfig.json",
+    "test:live": "playwright test --config playwright.live.config.ts",
     "test:spacetime": "vitest run --config vitest.spacetime.config.mts",
     "practice:smoke": "tsx --conditions=react-server scripts/practice-smoke.ts"
   },
