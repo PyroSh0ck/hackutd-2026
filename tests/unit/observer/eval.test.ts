@@ -144,10 +144,12 @@ class OracleModel implements StructuredModel {
         requestId: payload.requestId,
         currentMessageId: payload.currentMessageId,
         decision: { label: c.expected.label, evidence },
-        condition: c.expected.label === "conditional_acceptance" ? { description: "Stated condition", evidence } : null,
-        verificationObservations: (c.expected.verification ?? []).map((v) => ({ behavior: v.behavior, channelProvenance: v.provenance, channelDescription: null, evidence: [{ messageId: current.id, quote: current.content }] })),
+        condition: c.expected.label === "conditional_acceptance" ? { kind: "unspecified", description: "Stated condition", evidence } : null,
+        verificationObservations: (c.expected.verification ?? []).map((v) => ({ behavior: v.behavior, channelProvenance: v.provenance, channelDescription: null, claimedResult: "unspecified", evidence: [{ messageId: current.id, quote: current.content }] })),
         statedUnderstanding: c.expected.statedUnderstanding ? { description: "Stated belief", evidence: [{ messageId: current.id, quote: current.content }] } : null,
         ambiguities: [],
+        openIssues: [],
+        issueAcknowledgments: [],
       },
     };
   }

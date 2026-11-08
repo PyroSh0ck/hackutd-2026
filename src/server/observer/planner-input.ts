@@ -1,14 +1,13 @@
 import type { AssessmentRecord, FailureReason, PlannerObservation } from "@/contracts/observer";
-import { publicEvent, publicMessage, publicRequest, reduceRequestState } from "./state";
+import type { PlanRecord } from "@/contracts/planner";
+import { publicEvent, publicIssue, publicMessage, publicRequest, reduceRequestState, requestStatusOf, verificationState } from "./state";
 import type { Snapshot } from "./store/types";
 
 /**
- * Planner handoff (brief §4.9). Model interpretations and server facts are separate fields. Uncertainty is
- * spelled out so the planner cannot equate explicit acceptance with a completed action, or the absence of
- * an observed verification with proof that none happened.
+ * Planner handoff (observer brief §4.9 + addendum §5). Model interpretations and server facts are separate
+ * fields. Issue records, request status, verification state and stage are server-owned. The official
+ * verification RESULT is never included. `unresolvedQuestions` is display text only, never policy input.
  */
-
-export const MAX_USER_TURNS = 8;
 
 const FAILURE_TEXT: Record<FailureReason, string> = {
   model_unavailable: "The observer model was unavailable, so this reply was not interpreted.",
@@ -23,13 +22,13 @@ const FAILURE_TEXT: Record<FailureReason, string> = {
   correction_flagged: "The reviewer's correction still failed a contradiction check, so it was discarded.",
 };
 
-function questionsFor(record: AssessmentRecord, action: PlannerObservation["action"], verification: PlannerObservation["inAppVerification"]): string[] {
+function questionsFor(record: AssessmentRecord, action: PlannerObservation["action"], verification: PlannerObservation["verification"]): string[] {
   const a = record.finalAssessment;
   const out: string[] = [];
   if (record.failureReason) out.push(FAILURE_TEXT[record.failureReason]);
-  if (a.decision.label === "unclear") out.push("The user's decision about this request is unresolved; a clarifying question may be appropriate.");
+  if (record.requestId && a.decision.label === "unclear") out.push("The user's decision about this request is unresolved; a clarifying question may be appropriate.");
   for (const amb of a.ambiguities) out.push(`${amb.field}: ${amb.description}`);
-  if ((a.decision.label === "explicit_acceptance" || a.decision.label === "conditional_acceptance") && action.status !== "completed") {
+  if ((a.decision.label === "explicit_acceptance" || a.decision.label === "conditional_acceptance") && action?.status !== "completed") {
     out.push("Acceptance is an expressed intention only; no completed action has been observed.");
   }
   if (a.condition) out.push(`Condition stated by the user (fulfillment not established): ${a.condition.description}`);
@@ -40,34 +39,56 @@ function questionsFor(record: AssessmentRecord, action: PlannerObservation["acti
   return out;
 }
 
-/** One observation per request that has an applied assessment. Stale records are never used. */
-export function plannerObservations(s: Snapshot, requestIds?: readonly string[]): PlannerObservation[] {
-  const applied = s.assessments.filter((a) => a.application === "applied");
-  const userTurns = s.messages.filter((m) => m.role === "user").length;
-  return s.requests
-    .filter((r) => !requestIds || requestIds.includes(r.id))
-    .flatMap((request) => {
-      const history = applied.filter((a) => a.requestId === request.id);
-      const latest = history.at(-1);
-      if (!latest) return [];
-      const state = reduceRequestState(request, s.events, s.assessments);
-      const cited = new Set([latest.currentMessageId, ...latest.finalAssessment.decision.evidence.map((e) => e.messageId)]);
-      const supportingEvents = s.events.filter((e) => state.action.eventIds.includes(e.id) || state.inAppVerification.eventIds.includes(e.id) || e.requestId === request.id);
-      return [
-        {
-          request: publicRequest(request),
-          assessment: latest.finalAssessment,
-          interpretationSource: "model_interpretation" as const,
-          resolution: latest.resolution,
-          reviewStatus: latest.reviewStatus,
-          action: state.action,
-          inAppVerification: state.inAppVerification,
-          previousAssessment: history.at(-2)?.finalAssessment ?? null,
-          supportingMessages: s.messages.filter((m) => cited.has(m.id) || m.id === request.introducedByMessageId).map(publicMessage),
-          supportingEvents: supportingEvents.map(publicEvent),
-          unresolvedQuestions: questionsFor(latest, state.action, state.inAppVerification),
-          remainingTurns: Math.max(0, MAX_USER_TURNS - userTurns),
-        },
-      ];
+export function recentPlans(plans: readonly PlanRecord[]): PlannerObservation["recentPlans"] {
+  return plans
+    .filter((p) => p.status === "committed" && p.acceptedPlan)
+    .slice(-2)
+    .map((p) => {
+      const c = p.candidateSnapshot.find((x) => x.id === p.acceptedPlan!.candidateId)!;
+      return { action: c.action, moveId: c.moveId, targetId: c.issueId ?? c.requestId };
     });
+}
+
+/** The observation for the latest APPLIED assessment. Stale records are never used. */
+export function plannerObservation(s: Snapshot, maxUserTurns: number): PlannerObservation | null {
+  const applied = s.assessments.filter((a) => a.application === "applied");
+  const latest = applied.at(-1);
+  if (!latest) return null;
+  const { request, status } = requestStatusOf(s);
+  const verification = verificationState(s.events);
+  const action = request ? reduceRequestState(request, s.events, s.assessments).action : null;
+  const previous = applied.filter((a) => a.requestId === latest.requestId).at(-2) ?? null;
+  const issues = s.issues.filter((i) => i.status !== "resolved");
+  const cited = new Set<string>([latest.currentMessageId]);
+  for (const list of [latest.finalAssessment.decision.evidence, latest.finalAssessment.condition?.evidence ?? [], ...latest.finalAssessment.verificationObservations.map((o) => o.evidence), ...issues.map((i) => i.evidence)]) {
+    for (const e of list) cited.add(e.messageId);
+  }
+  if (request) cited.add(request.introducedByMessageId);
+  const eventIds = new Set([...(action?.eventIds ?? []), ...verification.eventIds]);
+  const supportingEvents = s.events.filter((e) => eventIds.has(e.id) || (request && e.requestId === request.id));
+  const userTurns = s.messages.filter((m) => m.role === "user").length;
+  const verificationView = { status: verification.status, eventIds: verification.eventIds };
+  return {
+    sessionId: s.session.id,
+    assessmentId: latest.id,
+    scope: latest.requestId ? "request" : "conversation",
+    basedOnRevision: latest.basedOnRevision,
+    currentRevision: s.session.revision,
+    sessionStage: s.session.stage,
+    request: request ? publicRequest(request) : null,
+    requestStatus: status,
+    assessment: latest.finalAssessment,
+    interpretationSource: "model_interpretation",
+    resolution: latest.resolution,
+    reviewStatus: latest.reviewStatus,
+    previousAssessment: previous?.finalAssessment ?? null,
+    issues: issues.map(publicIssue),
+    action,
+    verification: verificationView,
+    recentPlans: recentPlans(s.plans),
+    supportingMessages: s.messages.filter((m) => cited.has(m.id)).map(publicMessage),
+    supportingEvents: supportingEvents.map(publicEvent),
+    unresolvedQuestions: questionsFor(latest, action, verificationView),
+    remainingTurns: Math.max(0, maxUserTurns - userTurns),
+  };
 }

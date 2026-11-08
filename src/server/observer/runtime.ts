@@ -2,9 +2,12 @@ import "server-only";
 
 import { ObserverIdSchema } from "@/contracts/observer";
 import { NotFoundError } from "@/server/http/errors";
-import { readObserverModelConfig, structuredModels } from "./model";
+import { actorModelFromEnv } from "@/server/actor/model";
+import { FixtureActorModel, FixturePlannerModel } from "@/server/planner/testing/fixture-models";
+import { plannerModels, readObserverModelConfig, readPlannerModelConfig, structuredModels } from "./model";
 import { ObserverService } from "./service";
 import { PrismaObserverStore } from "./store/prisma-store";
+import { sharedTrace, traceEnabled } from "./trace";
 import { FixtureStructuredModel } from "./testing/fixture-model";
 
 let service: ObserverService | undefined;
@@ -16,6 +19,7 @@ export const fixtureModelsEnabled = () => process.env.E2E_TEST === "1" && proces
 export function observerService(): ObserverService {
   if (!service) {
     const config = readObserverModelConfig();
+    const planning = readPlannerModelConfig();
     service = new ObserverService({
       store: new PrismaObserverStore(),
       models: () =>
@@ -24,6 +28,13 @@ export function observerService(): ObserverService {
           : structuredModels(config),
       policy: config.reviewPolicy,
       timeoutMs: config.timeoutMs,
+      planning: {
+        // Actor v2 uses its own native json_schema adapter (src/server/actor/model.ts); ACTOR_MODEL_ID optional.
+        models: () => (fixtureModelsEnabled() ? { planner: new FixturePlannerModel(), actor: new FixtureActorModel() } : { planner: plannerModels(planning).planner, actor: actorModelFromEnv() }),
+        timeoutMs: planning.timeoutMs,
+      },
+      // Agent lab trace: development or AGENT_DEBUG=1 only (records prompts and raw model output).
+      trace: traceEnabled() ? sharedTrace() : undefined,
     });
   }
   return service;

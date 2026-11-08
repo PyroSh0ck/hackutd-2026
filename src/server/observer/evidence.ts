@@ -1,7 +1,9 @@
 import type { z } from "zod";
 import {
   ObserverAssessmentSchema,
+  type AssessmentScope,
   type Evidence,
+  type KnownIssue,
   type Message,
   type ObserverAssessment,
   type ObserverInput,
@@ -15,10 +17,14 @@ import {
 
 export type EvidenceContext = {
   sessionId: string;
-  requestId: string;
+  scope: AssessmentScope;
+  /** Null in conversation scope. */
+  requestId: string | null;
   currentMessageId: string;
   /** The messages actually supplied to the model. Evidence may only cite user messages from here. */
   messages: readonly Message[];
+  /** Issues supplied to the model (this session only). Acknowledgments may cite only addressed ones. */
+  knownIssues: readonly KnownIssue[];
 };
 
 export type CandidateValidation = {
@@ -28,11 +34,18 @@ export type CandidateValidation = {
   errors: ValidationError[];
 };
 
-const REFERENCE_CODES = new Set<ValidationError["code"]>(["invalid_request_reference", "invalid_message_reference", "non_user_evidence", "quote_not_found"]);
-const CATEGORY_KEYS = new Set(["label", "behavior", "channelProvenance"]);
+const REFERENCE_CODES = new Set<ValidationError["code"]>(["invalid_request_reference", "invalid_message_reference", "non_user_evidence", "quote_not_found", "invalid_issue_reference"]);
+const CATEGORY_KEYS = new Set(["label", "behavior", "channelProvenance", "kind", "claimedResult"]);
 
 export function contextFor(input: ObserverInput): EvidenceContext {
-  return { sessionId: input.sessionId, requestId: input.request.id, currentMessageId: input.currentMessageId, messages: input.relevantMessages };
+  return {
+    sessionId: input.sessionId,
+    scope: input.scope,
+    requestId: input.request?.id ?? null,
+    currentMessageId: input.currentMessageId,
+    messages: input.relevantMessages,
+    knownIssues: input.knownIssues,
+  };
 }
 
 function pathOf(path: readonly PropertyKey[]): string {
@@ -59,8 +72,16 @@ export function evidenceFields(assessment: ObserverAssessment): Array<{ field: s
     ...assessment.verificationObservations.map((o, i) => ({ field: `verificationObservations[${i}].evidence`, evidence: o.evidence })),
     ...(assessment.statedUnderstanding ? [{ field: "statedUnderstanding.evidence", evidence: assessment.statedUnderstanding.evidence }] : []),
     ...assessment.ambiguities.map((a, i) => ({ field: `ambiguities[${i}].evidence`, evidence: a.evidence })),
+    ...assessment.openIssues.map((d, i) => ({ field: `openIssues[${i}].evidence`, evidence: d.evidence })),
+    ...assessment.issueAcknowledgments.map((k, i) => ({ field: `issueAcknowledgments[${i}].evidence`, evidence: k.evidence })),
   ];
 }
+
+/**
+ * Exact-duplicate key for an issue draft: kind + ordered evidence (addendum §4). No semantic matching.
+ * JSON-encoded (no NUL separators: the key is stored in a Postgres text column).
+ */
+export const issueDraftKey = (d: { kind: string; evidence: readonly Evidence[] }) => JSON.stringify([d.kind, ...d.evidence.map((e) => [e.messageId, e.quote])]);
 
 /** Checks one evidence span. Exact, case-preserving substring match against the original text. */
 export function checkEvidence(evidence: Evidence, field: string, ctx: EvidenceContext): ValidationError | null {
@@ -75,7 +96,13 @@ export function checkEvidence(evidence: Evidence, field: string, ctx: EvidenceCo
 
 export function crossFieldErrors(a: ObserverAssessment, ctx: EvidenceContext): ValidationError[] {
   const errors: ValidationError[] = [];
-  if (a.requestId !== ctx.requestId) errors.push({ field: "requestId", code: "invalid_request_reference", detail: "requestId does not match the request being assessed." });
+  if (ctx.scope === "conversation") {
+    // Addendum §3: no request exists, so there is no stance to classify.
+    if (a.requestId !== null) errors.push({ field: "requestId", code: "invalid_scope", detail: "Conversation scope: requestId must be null." });
+    if (a.decision.label !== "unclear") errors.push({ field: "decision.label", code: "invalid_scope", detail: "Conversation scope: the decision must be unclear (no request has been presented)." });
+    if (a.decision.evidence.length) errors.push({ field: "decision.evidence", code: "invalid_scope", detail: "Conversation scope: decision evidence must be empty." });
+    if (a.condition) errors.push({ field: "condition", code: "invalid_scope", detail: "Conversation scope: condition must be null." });
+  } else if (a.requestId !== ctx.requestId) errors.push({ field: "requestId", code: "invalid_request_reference", detail: "requestId does not match the request being assessed." });
   if (a.currentMessageId !== ctx.currentMessageId) errors.push({ field: "currentMessageId", code: "invalid_message_reference", detail: "currentMessageId does not match the message being assessed." });
   if (a.decision.label !== "unclear" && a.decision.evidence.length === 0) {
     errors.push({ field: "decision.evidence", code: "missing_evidence", detail: `Decision "${a.decision.label}" needs at least one evidence span.` });
@@ -88,6 +115,23 @@ export function crossFieldErrors(a: ObserverAssessment, ctx: EvidenceContext): V
   }
   a.verificationObservations.forEach((o, i) => {
     if (o.evidence.length === 0) errors.push({ field: `verificationObservations[${i}].evidence`, code: "missing_evidence", detail: "Each verification observation needs evidence." });
+    if (o.claimedResult !== "unspecified" && o.behavior !== "claimed_verification_completed") {
+      errors.push({ field: `verificationObservations[${i}].claimedResult`, code: "inconsistent_fields", detail: `claimedResult must be unspecified unless the behavior is claimed_verification_completed (got ${o.behavior}).` });
+    }
+  });
+  const drafts = new Set<string>();
+  a.openIssues.forEach((d, i) => {
+    const key = issueDraftKey(d);
+    if (drafts.has(key)) errors.push({ field: `openIssues[${i}]`, code: "inconsistent_fields", detail: "Duplicate issue draft (same kind and evidence)." });
+    drafts.add(key);
+  });
+  const acknowledged = new Set<string>();
+  a.issueAcknowledgments.forEach((k, i) => {
+    const issue = ctx.knownIssues.find((x) => x.id === k.issueId);
+    if (!issue) errors.push({ field: `issueAcknowledgments[${i}].issueId`, code: "invalid_issue_reference", detail: `Issue ${k.issueId} was not supplied in knownIssues.` });
+    else if (issue.status !== "addressed") errors.push({ field: `issueAcknowledgments[${i}].issueId`, code: "invalid_issue_reference", detail: `Issue ${k.issueId} has not been addressed, so it cannot be acknowledged.` });
+    if (acknowledged.has(k.issueId)) errors.push({ field: `issueAcknowledgments[${i}]`, code: "inconsistent_fields", detail: "The same issue is acknowledged twice." });
+    acknowledged.add(k.issueId);
   });
   if (a.statedUnderstanding && a.statedUnderstanding.evidence.length === 0) {
     errors.push({ field: "statedUnderstanding.evidence", code: "missing_evidence", detail: "Stated understanding needs evidence." });
@@ -132,13 +176,22 @@ export function assertObserverInput(input: ObserverInput): void {
   const current = byId.get(input.currentMessageId);
   if (!current) problems.push("current message missing from context");
   else if (current.role !== "user") problems.push("current message is not a user message");
-  const intro = byId.get(input.request.introducedByMessageId);
-  if (!intro) problems.push("request's introducing message missing from context");
-  else if (intro.role !== "assistant") problems.push("request must be introduced by an assistant message");
+  if ((input.scope === "conversation") !== (input.request === null)) problems.push("scope must be conversation exactly when request is null");
+  const requestId = input.request?.id ?? null;
+  if (input.request) {
+    const intro = byId.get(input.request.introducedByMessageId);
+    if (!intro) problems.push("request's introducing message missing from context");
+    else if (intro.role !== "assistant") problems.push("request must be introduced by an assistant message");
+  }
   for (const e of input.relevantEvents) {
     if (e.sessionId !== input.sessionId) problems.push(`event ${e.id} belongs to another session`);
-    if (e.requestId !== null && e.requestId !== input.request.id) problems.push(`event ${e.id} belongs to another request`);
+    if (e.requestId !== null && e.requestId !== requestId) problems.push(`event ${e.id} belongs to another request`);
   }
-  if (input.previousAssessment && input.previousAssessment.requestId !== input.request.id) problems.push("previous assessment is for another request");
+  if (input.previousAssessment && input.previousAssessment.requestId !== requestId) problems.push("previous assessment is for another scope or request");
+  const issueIds = new Set<string>();
+  for (const issue of input.knownIssues) {
+    if (issueIds.has(issue.id)) problems.push(`known issue ${issue.id} is listed twice`);
+    issueIds.add(issue.id);
+  }
   if (problems.length) throw new InvalidObserverInputError(problems);
 }

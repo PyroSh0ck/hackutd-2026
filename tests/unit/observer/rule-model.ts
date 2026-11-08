@@ -3,8 +3,9 @@ import type { StructuredModel, StructuredRequest, StructuredResult } from "@/ser
 
 export type PromptView = {
   stage: StructuredRequest["stage"];
-  requestId: string;
-  targetAction: string;
+  scope: "conversation" | "request";
+  requestId: string | null;
+  targetAction: string | null;
   currentMessageId: string;
   current: string;
   proposed?: ObserverAssessment;
@@ -17,8 +18,9 @@ export function parsePrompt(request: StructuredRequest): PromptView {
   const messages = base.conversationUntrustedData as Array<{ id: string; content: string }>;
   return {
     stage: request.stage,
-    requestId: base.request.id,
-    targetAction: base.request.targetAction,
+    scope: base.scope,
+    requestId: base.request?.id ?? null,
+    targetAction: base.request?.targetAction ?? null,
     currentMessageId: base.currentMessageId,
     current: messages.find((m) => m.id === base.currentMessageId)!.content,
     proposed: payload.proposedAssessment,
@@ -48,6 +50,8 @@ export function gate() {
 
 /** Builds an assessment for a prompt view quoting the whole current message. */
 export function answer(view: PromptView, label: ObserverAssessment["decision"]["label"], extra: Partial<ObserverAssessment> = {}): StructuredResult {
+  // Conversation scope has no stance (addendum §3).
+  if (view.scope === "conversation") label = "unclear";
   const evidence = label === "unclear" ? [] : [{ messageId: view.currentMessageId, quote: view.current }];
   return {
     ok: true,
@@ -59,6 +63,8 @@ export function answer(view: PromptView, label: ObserverAssessment["decision"]["
       verificationObservations: [],
       statedUnderstanding: null,
       ambiguities: [],
+      openIssues: [],
+      issueAcknowledgments: [],
       ...extra,
     },
   };

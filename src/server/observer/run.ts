@@ -91,7 +91,7 @@ export async function runObserver(input: ObserverInput, deps: RunDeps): Promise<
   const fallback = (failureReason: FailureReason, reviewStatus: RunOutcome["reviewStatus"] = "not_requested", reviewerResponse: ReviewerResponse | null = null) =>
     outcome({ finalAssessment: fallbackAssessment(input), reviewStatus, reviewerResponse, resolution: "unclear_fallback", failureReason });
 
-  async function call(model: StructuredModel, request: Omit<StructuredRequest, "timeoutMs">): Promise<{ result: StructuredResult; attempt: ModelAttempt }> {
+  async function call(model: StructuredModel, request: Omit<StructuredRequest, "timeoutMs"> & { stage: ModelAttempt["stage"] }): Promise<{ result: StructuredResult; attempt: ModelAttempt }> {
     if (calls >= MAX_MODEL_CALLS) throw new Error("Observer model-call budget exceeded (bug).");
     calls++;
     const startedAt = now();

@@ -53,6 +53,7 @@ export default defineConfig({
       E2E_TEST: "1",
       // Deterministic, labeled observer model for HTTP plumbing tests (requires E2E_TEST=1 as well).
       OBSERVER_MODEL_MODE: "fixture",
+      AGENT_DEBUG: "1",
     },
   },
 });

@@ -6,10 +6,21 @@ model ObserverSession {
   /// Anonymous player id from the signed `scamper_player` cookie. Never sent to clients.
   ownerKey             String
   threadId             String    @unique @db.Uuid
+  /// Scenario identity (planner brief §3). Pre-planner rows are the legacy observer scenario.
+  scenarioId           String    @default("legacy-observer-v1")
+  scenarioVersion      Int       @default(0)
   revision             Int
   conversationRevision Int
   turn                 Int
   ended                Boolean   @default(false)
+  /// Current view of the session lifecycle: active | verifying | awaiting_final_decision | ended.
+  stage                String    @default("active")
+  /// First terminal outcome wins; never overwritten.
+  outcome              String?
+  /// Server-generated FICTIONAL practice code. Never sent to planner/actor models.
+  practiceCode         String?
+  /// Reserved fictional case reference (CD-######), introduced only by a committed message.
+  caseReference        String?
   /// Durable, leased processing claim (one processor per session across instances).
   claimId              String?
   claimExpiresAt       DateTime?
@@ -21,6 +32,9 @@ model ObserverSession {
   events      ObserverEvent[]
   receipts    ObserverReceipt[]
   assessments ObserverAssessment[]
+  issues      ObserverIssue[]
+  additions   ObserverAddition[]
+  plans       PlannerRecord[]
 
   @@index([ownerKey])
   @@map("observer_session")
@@ -64,12 +78,16 @@ model ObserverEvent {
   requestId   String?
   turn        Int
   type        String
-  /// Server-issued id linking official_directory_opened to official_verification_completed.
+  /// Server-issued id linking the verification launch to its completion.
   challengeId String?
+  /// Server-only detail (verification result code, stop source, audit target). Never sent to models.
+  detail      String?
+  /// Insertion order: one commit can write several events at the same revision.
+  seq         Int             @default(autoincrement())
   createdAt   DateTime
   session     ObserverSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
-  @@unique([sessionId, revision])
+  @@index([sessionId, revision])
   @@map("observer_event")
 }
 
@@ -93,7 +111,8 @@ model ObserverReceipt {
 model ObserverAssessment {
   id               String          @id
   sessionId        String          @db.Uuid
-  requestId        String
+  /// Null for a conversation-scope assessment (no request presented yet).
+  requestId        String?
   currentMessageId String
   basedOnRevision  Int
   application      String
@@ -105,4 +124,56 @@ model ObserverAssessment {
 
   @@index([sessionId, seq])
   @@map("observer_assessment")
+}
+
+/// Server-owned issue lifecycle (addendum §4). Created only from applied accepted/corrected assessments.
+model ObserverIssue {
+  id                     String          @id
+  sessionId              String          @db.Uuid
+  requestId              String?
+  kind                   String
+  summary                String
+  evidence               Json
+  status                 String
+  originAssessmentId     String
+  addressedMessageId     String?
+  resolvedByAssessmentId String?
+  resolutionEventId      String?
+  /// assessment id + kind + ordered evidence: exact replay deduplication.
+  dedupeKey              String          @unique
+  seq                    Int             @default(autoincrement())
+  session                ObserverSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, seq])
+  @@map("observer_issue")
+}
+
+/// Reserved bounded additions (planner brief §3). `introducedMessageId` is set only by a committed message.
+model ObserverAddition {
+  sessionId           String          @db.Uuid
+  additionId          String
+  text                String
+  introducedMessageId String?
+  session             ObserverSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@id([sessionId, additionId])
+  @@map("observer_addition")
+}
+
+/// Planner/actor attempts (planner brief §7, §10). `committedKey` allows at most one committed response
+/// per input event; prepared/failed/stale rows keep it null.
+model PlannerRecord {
+  id           String          @id
+  sessionId    String          @db.Uuid
+  inputId      String
+  attempt      Int
+  status       String
+  committedKey String?         @unique
+  seq          Int             @default(autoincrement())
+  record       Json
+  createdAt    DateTime
+  session      ObserverSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, seq])
+  @@map("planner_record")
 }

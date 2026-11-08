@@ -58,7 +58,7 @@ describe("Stage 2: evidence references", () => {
   it("checks evidence in every field, reporting each failing span", () => {
     const a: ObserverAssessment = {
       ...assessment(input, "unclear", null),
-      verificationObservations: [{ behavior: "requested_sender_proof", channelProvenance: "unspecified", channelDescription: null, evidence: [{ messageId: "m-1", quote: "Who is this?" }, { messageId: "m-1", quote: "Who are you?" }] }],
+      verificationObservations: [{ behavior: "requested_sender_proof", channelProvenance: "unspecified", channelDescription: null, claimedResult: "unspecified", evidence: [{ messageId: "m-1", quote: "Who is this?" }, { messageId: "m-1", quote: "Who are you?" }] }],
       statedUnderstanding: { description: "x", evidence: [{ messageId: "m-2", quote: "Security desk." }] },
       ambiguities: [{ field: "decision", description: "x", evidence: [{ messageId: "m-404", quote: "x" }] }],
     };

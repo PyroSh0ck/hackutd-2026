@@ -20,10 +20,10 @@ import { contradictionFlags, isSemanticFlag } from "./flags";
 export type ReviewValidation = { response: ReviewerResponse | null; errors: ValidationError[] };
 
 function indexIn(field: string, a: ObserverAssessment): boolean {
-  const m = /^(verificationObservations|ambiguities)\[(\d{1,2})\]$/.exec(field);
+  const m = /^(verificationObservations|ambiguities|openIssues|issueAcknowledgments)\[(\d{1,2})\]/.exec(field);
   if (!m) return true;
-  const list = m[1] === "verificationObservations" ? a.verificationObservations : a.ambiguities;
-  return Number(m[2]) < list.length;
+  const lists = { verificationObservations: a.verificationObservations, ambiguities: a.ambiguities, openIssues: a.openIssues, issueAcknowledgments: a.issueAcknowledgments } as const;
+  return Number(m[2]) < lists[m[1] as keyof typeof lists].length;
 }
 
 export function validateReview(raw: unknown, input: ObserverInput, proposed: ObserverAssessment): ReviewValidation {

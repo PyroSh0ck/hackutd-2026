@@ -141,7 +141,7 @@ describe("Stage 3: prompt assembly", () => {
     expect(payload.conversationUntrustedData.map((m: { content: string }) => m.content)).toEqual(input.relevantMessages.map((m) => m.content));
     expect(payload.requestId).toBe("r-code");
     expect(payload.currentMessageId).toBe("m-cur");
-    expect(payload.request.description).toBe(input.request.description);
+    expect(payload.request.description).toBe(input.request!.description);
     expect(payload.applicationEventsServerFacts).toEqual([{ id: "e-1", type: "official_directory_opened", requestId: "r-code", turn: 1 }]);
     for (const definition of [...Object.values(RUBRIC.decisionDefinitions), ...RUBRIC.evidenceRules, ...RUBRIC.interpretationRules]) {
       expect(prompt).toContain(JSON.stringify(definition).slice(1, -1));
@@ -151,7 +151,7 @@ describe("Stage 3: prompt assembly", () => {
   it("injected text stays inside a JSON string and cannot add top-level keys", () => {
     const prompt = observerUserPrompt(input);
     const payload = JSON.parse(prompt.slice(prompt.indexOf("{")));
-    expect(Object.keys(payload).sort()).toEqual(["applicationEventsServerFacts", "conversationUntrustedData", "currentMessageId", "previousAssessment", "request", "requestId", "rubric", "rubricVersion", "task"]);
+    expect(Object.keys(payload).sort()).toEqual(["applicationEventsServerFacts", "conversationUntrustedData", "currentMessageId", "knownIssues", "previousAssessment", "request", "requestId", "rubric", "rubricVersion", "scope", "task"]);
     expect(payload.conversationUntrustedData.at(-1).content).toBe(injection);
   });
 

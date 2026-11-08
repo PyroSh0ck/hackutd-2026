@@ -1,4 +1,4 @@
-import type { AppEvent, Message, ObserverAssessment, ObserverInput, SimulatedRequest, TargetAction } from "@/contracts/observer";
+import type { AppEvent, KnownIssue, Message, ObserverAssessment, ObserverInput, SimulatedRequest, TargetAction } from "@/contracts/observer";
 import { RUBRIC, RUBRIC_VERSION } from "@/server/observer/rubric";
 
 export const SESSION = "sess-1";
@@ -25,7 +25,7 @@ export const INTRO = msg("m-intro", "assistant", "Security desk here. Please rea
  */
 export function inputFor(
   reply: string,
-  options: { request?: SimulatedRequest; history?: Message[]; events?: AppEvent[]; previous?: ObserverAssessment | null; revision?: number } = {},
+  options: { request?: SimulatedRequest; history?: Message[]; events?: AppEvent[]; previous?: ObserverAssessment | null; revision?: number; knownIssues?: KnownIssue[] } = {},
 ): ObserverInput {
   const request = options.request ?? req("r-code");
   const current = msg("m-cur", "user", reply, (options.history?.length ?? 0) + 1);
@@ -34,28 +34,48 @@ export function inputFor(
     turn: current.turn,
     basedOnRevision: options.revision ?? 3,
     currentMessageId: current.id,
+    scope: "request",
     request,
     relevantMessages: [INTRO, ...(options.history ?? []), current],
     previousAssessment: options.previous ?? null,
     relevantEvents: options.events ?? [],
+    knownIssues: options.knownIssues ?? [],
     rubricVersion: RUBRIC_VERSION,
     rubric: RUBRIC,
   };
 }
 
-type Partial2 = Partial<Omit<ObserverAssessment, "decision">> & { decision?: Partial<ObserverAssessment["decision"]> };
+type Partial2 = Partial<Omit<ObserverAssessment, "decision" | "condition" | "verificationObservations">> & {
+  decision?: Partial<ObserverAssessment["decision"]>;
+  /** v1-style fixtures may omit the v2 kind / claimedResult; they default to "unspecified". */
+  condition?: (Omit<NonNullable<ObserverAssessment["condition"]>, "kind"> & { kind?: NonNullable<ObserverAssessment["condition"]>["kind"] }) | null;
+  verificationObservations?: Array<Omit<ObserverAssessment["verificationObservations"][number], "claimedResult"> & { claimedResult?: ObserverAssessment["verificationObservations"][number]["claimedResult"] }>;
+};
+
+/** Fills the v2 defaults for v1-shaped fixture fragments (test convenience only; models get no defaults). */
+export function v2(extra: Partial2): Partial<ObserverAssessment> {
+  const { condition, verificationObservations, decision: _d, ...rest } = extra;
+  void _d;
+  return {
+    ...rest,
+    ...(condition !== undefined ? { condition: condition ? { kind: "unspecified" as const, ...condition } : null } : {}),
+    ...(verificationObservations ? { verificationObservations: verificationObservations.map((o) => ({ claimedResult: "unspecified" as const, ...o })) } : {}),
+  };
+}
 
 /** A well-formed assessment for `input`, quoting `quote` from the current message. */
 export function assessment(input: ObserverInput, label: ObserverAssessment["decision"]["label"], quote: string | null, extra: Partial2 = {}): ObserverAssessment {
   const evidence = quote === null ? [] : [{ messageId: input.currentMessageId, quote }];
   return {
-    requestId: input.request.id,
+    requestId: input.request?.id ?? null,
     currentMessageId: input.currentMessageId,
     condition: null,
     verificationObservations: [],
     statedUnderstanding: null,
     ambiguities: [],
-    ...extra,
+    openIssues: [],
+    issueAcknowledgments: [],
+    ...v2(extra),
     decision: { label, evidence, ...extra.decision },
   };
 }

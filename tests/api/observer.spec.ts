@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { ApiErrorResponseSchema } from "@/contracts/api-error";
-import { AssessmentsResponseSchema, ObserverSessionResponseSchema, PlannerResponseSchema, type ObserverSessionView, type SubmitEventRequest } from "@/contracts/observer";
+import { AssessmentsResponseSchema, ObserverSessionResponseSchema, type SubmitEventRequest } from "@/contracts/observer";
+import { PlannerResponseSchema, PlansResponseSchema } from "@/contracts/planner";
 
-// Real API + Postgres (Neon test branch). Models are the LABELED test-only fixture models
-// (E2E_TEST=1 + OBSERVER_MODEL_MODE=fixture): this proves persistence, ownership, idempotency, and
-// concurrency over HTTP — not semantic quality. Real-model behavior: `pnpm observer:eval`.
+// Real API + Postgres (Neon test branch), mobile-code-01 scenario. Models are the LABELED test-only fixture
+// models (E2E_TEST=1 + OBSERVER_MODEL_MODE=fixture): this proves persistence, lifecycle, ownership and
+// idempotency over HTTP — not semantic quality. Real-model behavior: `pnpm observer:eval`.
 
 const ORIGIN = "http://127.0.0.1:3100";
 const headers = { Origin: ORIGIN };
@@ -23,124 +24,100 @@ async function okBody(response: Awaited<ReturnType<APIRequestContext["post"]>>) 
   expect(response.status(), await response.text()).toBe(200);
   return ObserverSessionResponseSchema.parse(await response.json());
 }
+async function reason(response: Awaited<ReturnType<APIRequestContext["post"]>>) {
+  expect(response.status()).toBe(422);
+  return ApiErrorResponseSchema.parse(await response.json()).error.reason;
+}
 const assessments = async (request: APIRequestContext, id: string) => AssessmentsResponseSchema.parse(await (await request.get(`/api/observer/sessions/${id}/assessments`)).json()).assessments;
-const planner = async (request: APIRequestContext, id: string) => PlannerResponseSchema.parse(await (await request.get(`/api/observer/sessions/${id}/planner`)).json()).observations;
-const codeOf = (s: ObserverSessionView) => s.requests.find((r) => r.targetAction === "share_fictional_code")!;
+const planner = async (request: APIRequestContext, id: string) => PlannerResponseSchema.parse(await (await request.get(`/api/observer/sessions/${id}/planner`)).json());
+const plans = async (request: APIRequestContext, id: string) => PlansResponseSchema.parse(await (await request.get(`/api/observer/sessions/${id}/plans`)).json()).plans;
 
-test.describe("observer API", () => {
-  test("create: cookie identity, no-store, opening with two fictional requests, nothing private exposed", async ({ request }) => {
+/** Question → answer, then "Okay." → the request card is presented. */
+async function withRequest(request: APIRequestContext) {
+  const { session } = await create(request);
+  await okBody(await say(request, session.sessionId, "Who are you?"));
+  const presented = await okBody(await say(request, session.sessionId, "Okay."));
+  return { id: session.sessionId, session: presented.session };
+}
+
+test.describe("practice session API (observer + planner)", () => {
+  test("create: cookie identity, no-store, fixed opening, no request yet, nothing private exposed", async ({ request }) => {
     const response = await request.post("/api/observer/sessions", { headers });
     expect(response.status()).toBe(201);
     expect(response.headers()["cache-control"]).toBe("no-store");
     expect(response.headers()["set-cookie"]).toMatch(/scamper_player=/);
     const { session } = ObserverSessionResponseSchema.parse(await response.json());
-    expect(session.requests.map((r) => r.targetAction)).toEqual(["share_fictional_code", "approve_simulated_payment"]);
-    expect(JSON.stringify(session)).not.toMatch(/ownerKey|anon:|challengeId/);
+    expect(session).toMatchObject({ stage: "active", outcome: null, requestStatus: "not_presented", practiceCode: null, maxTurns: 12 });
+    expect(session.messages).toHaveLength(1);
+    expect(session.messages[0].content).toMatch(/^Hi, I'm Avery from Cedar Account Support/);
+    expect(session.requests).toHaveLength(0);
+    expect(JSON.stringify(session)).not.toMatch(/ownerKey|anon:|challengeId|CD-\d{6}/);
   });
 
-  test("refusal assessed, then a submitted code: both persist across reload; audit is labeled", async ({ request }) => {
-    const { session } = await create(request);
-    const code = codeOf(session);
-    const res = await okBody(await say(request, session.sessionId, "I won't send the code."));
-    expect(res.processing).toMatchObject({ status: "processed", assessed: 2, stale: 0 });
-    await okBody(await act(request, session.sessionId, { type: "practice_code_submitted", requestId: code.id }));
-
-    const reloaded = ObserverSessionResponseSchema.parse(await (await request.get(`/api/observer/sessions/${session.sessionId}`)).json()).session;
-    expect(reloaded.requestStates.find((s) => s.requestId === code.id)!.action.status).toBe("completed");
-    const [obs] = (await planner(request, session.sessionId)).filter((o) => o.request.id === code.id);
-    expect(obs).toMatchObject({ assessment: { decision: { label: "refused" } }, action: { status: "completed" }, interpretationSource: "model_interpretation", reviewStatus: "supported" });
-    const records = await assessments(request, session.sessionId);
-    expect(records.every((r) => r.observerModel === "fixture-observer" && r.application === "applied")).toBe(true);
-    expect(JSON.stringify(records)).not.toMatch(/OBSERVER_SYSTEM|You are the observer/);
+  test("question is answered, then the request is presented once; planner payload never sees hidden facts", async ({ request }) => {
+    const { id, session } = await withRequest(request);
+    expect(session.requestStatus).toBe("pending");
+    expect(session.requests).toHaveLength(1);
+    expect(session.practiceCode).toMatch(/^\d{6}$/);
+    expect(session.issues[0]).toMatchObject({ kind: "identity_question", status: "addressed" });
+    expect(session.messages.filter((m) => m.role === "assistant")).toHaveLength(3);
+    const committed = (await plans(request, id)).filter((p) => p.status === "committed");
+    expect(committed).toHaveLength(2);
+    const handoff = JSON.stringify(await planner(request, id));
+    expect(handoff).not.toContain(session.practiceCode!);
+    expect(handoff).not.toMatch(/not initiated by Cedar|not_initiated_by_provider/);
+    expect((await assessments(request, id)).every((r) => r.observerModel === "fixture-observer")).toBe(true);
   });
 
-  test("flagged correction and single repair paths persist their history", async ({ request }) => {
-    const { session } = await create(request);
-    const code = codeOf(session);
-    await okBody(await say(request, session.sessionId, "If I sent it, would that help?"));
-    await okBody(await say(request, session.sessionId, "Hmm, let me think about whether to do it."));
-    const records = (await assessments(request, session.sessionId)).filter((r) => r.requestId === code.id);
-    expect(records[0]).toMatchObject({ reviewStatus: "corrected", resolution: "corrected", proposedAssessment: { decision: { label: "explicit_acceptance" } }, finalAssessment: { decision: { label: "unclear" } } });
-    expect(records[0].attempts.map((a) => a.stage)).toEqual(["observer", "reviewer"]);
-    expect(records[1]).toMatchObject({ repairAttempted: true, resolution: "accepted", finalAssessment: { decision: { label: "considering" } } });
-    expect(records[1].attempts.map((a) => [a.stage, a.outcome])).toEqual([["observer", "malformed_output"], ["repair", "ok"]]);
-    const [obs] = (await planner(request, session.sessionId)).filter((o) => o.request.id === code.id);
-    expect(obs.previousAssessment?.decision.label).toBe("unclear");
+  test("refusal without ending; wrong code rejected; the server's code ends as simulated exposure", async ({ request }) => {
+    const { id, session } = await withRequest(request);
+    const refused = await okBody(await say(request, id, "I won't send the code."));
+    expect(refused.session).toMatchObject({ ended: false, stage: "active" });
+    expect(refused.session.messages.at(-1)!.role).toBe("assistant");
+    const requestId = session.requests[0].id;
+    const wrong = session.practiceCode === "000000" ? "111111" : "000000";
+    expect(await reason(await act(request, id, { type: "practice_code_submitted", requestId, practiceCode: wrong }))).toBe("CODE_MISMATCH");
+    const done = await okBody(await act(request, id, { type: "practice_code_submitted", requestId, practiceCode: session.practiceCode! }));
+    expect(done.session).toMatchObject({ ended: true, outcome: "simulated_exposure", requestStatus: "completed" });
+    expect(await reason(await say(request, id, "hello?"))).toBe("SESSION_ENDED");
   });
 
-  test("Stage 6 scenarios over HTTP: conditional + independent check, sender-supplied check, ambiguous, changed mind", async ({ request }) => {
-    const run = async (lines: string[]) => {
-      const { session } = await create(request);
-      for (const line of lines) await okBody(await say(request, session.sessionId, line));
-      return (await planner(request, session.sessionId)).find((o) => o.request.id === codeOf(session).id)!;
-    };
-    const conditional = await run(["Only after I contact official support myself."]);
-    expect(conditional.assessment).toMatchObject({ decision: { label: "conditional_acceptance" }, verificationObservations: [{ channelProvenance: "user_claimed_independent" }] });
-    expect(conditional).toMatchObject({ action: { status: "not_started" }, inAppVerification: { status: "not_observed" } });
+  test("verification pauses the opponent; completion requires the challenge; reject and report ends as defense", async ({ request }) => {
+    const { id } = await withRequest(request);
+    const started = await okBody(await act(request, id, { type: "official_verification_started", requestId: null }));
+    expect(started.session).toMatchObject({ stage: "verifying", verification: { status: "in_progress" } });
+    expect(started.session.verification.officialResult).toMatch(/not initiated by Cedar Mobile/);
+    expect(await reason(await say(request, id, "Are you there?"))).toBe("STAGE_PAUSED");
+    expect(await reason(await act(request, id, { type: "official_verification_completed", requestId: null, challengeId: "forged" }))).toBe("CHALLENGE_INVALID");
+    const done = await okBody(await act(request, id, { type: "official_verification_completed", requestId: null, challengeId: started.challengeId }));
+    expect(done.session.stage).toBe("awaiting_final_decision");
+    const ended = await okBody(await act(request, id, { type: "conversation_reported", requestId: null }));
+    expect(ended.session).toMatchObject({ ended: true, outcome: "defense_demonstrated" });
+  });
 
-    const sender = await run(["I'll call the number you just sent."]);
-    expect(sender.assessment.verificationObservations[0]).toMatchObject({ behavior: "expressed_verification_intent", channelProvenance: "sender_supplied" });
-
-    const ambiguous = await run(["Okay."]);
-    expect(ambiguous.assessment.decision.label).toBe("unclear");
-    expect(ambiguous.unresolvedQuestions.length).toBeGreaterThan(0);
-
-    const changed = await run(["Yes, I'll send the code.", "I won't send the code."]);
-    expect(changed.assessment.decision.label).toBe("refused");
-    expect(changed.previousAssessment?.decision.label).toBe("explicit_acceptance");
+  test("text stop ends safely; ambiguous stop asks for confirmation without generation", async ({ request }) => {
+    const a = (await create(request)).session.sessionId;
+    const stopped = await okBody(await say(request, a, "I want to stop the exercise."));
+    expect(stopped.session).toMatchObject({ ended: true, outcome: "safely_disengaged" });
+    const b = (await create(request)).session.sessionId;
+    const paused = await okBody(await say(request, b, "stop"));
+    expect(paused.session.stopConfirmationPending).toBe(true);
+    expect(paused.session.messages.filter((m) => m.role === "assistant")).toHaveLength(1);
+    const resumed = await okBody(await act(request, b, { type: "stop_confirmation_dismissed", requestId: null }));
+    expect(resumed.session.stopConfirmationPending).toBe(false);
   });
 
   test("idempotency over the database: duplicates apply once; reused key with new body conflicts", async ({ request }) => {
     const { session } = await create(request);
     const key = randomUUID();
-    const responses = await Promise.all([1, 2, 3].map(() => say(request, session.sessionId, "Okay.", key)));
-    const bodies = await Promise.all(responses.map(okBody));
+    const bodies = await Promise.all((await Promise.all([1, 2, 3].map(() => say(request, session.sessionId, "Okay.", key)))).map(okBody));
     expect(bodies.filter((b) => b.duplicate).length).toBe(2);
     const after = await okBody(await say(request, session.sessionId, "Okay.", key));
     expect(after.session.messages.filter((m) => m.role === "user")).toHaveLength(1);
     const conflict = await say(request, session.sessionId, "Different", key);
     expect(conflict.status()).toBe(409);
     expect(ApiErrorResponseSchema.parse(await conflict.json()).error.code).toBe("IDEMPOTENCY_CONFLICT");
-    expect((await assessments(request, session.sessionId)).length).toBe(2);
-  });
-
-  test("simultaneous distinct turns: both recorded, never two applied records for one pair, latest turn assessed", async ({ request }) => {
-    const { session } = await create(request);
-    const [a, b] = await Promise.all([say(request, session.sessionId, "Okay."), say(request, session.sessionId, "Yes, I'll send the code.")]);
-    await okBody(a);
-    await okBody(b);
-    await okBody(await request.post(`/api/observer/sessions/${session.sessionId}/process`, { headers }));
-    const view = ObserverSessionResponseSchema.parse(await (await request.get(`/api/observer/sessions/${session.sessionId}`)).json()).session;
-    const users = view.messages.filter((m) => m.role === "user");
-    expect(users).toHaveLength(2);
-    const records = await assessments(request, session.sessionId);
-    const applied = records.filter((r) => r.application === "applied");
-    const pairs = applied.map((r) => `${r.requestId}/${r.currentMessageId}`);
-    expect(new Set(pairs).size).toBe(pairs.length);
-    const latest = users.at(-1)!.id;
-    for (const r of view.requests) expect(applied.some((x) => x.requestId === r.id && x.currentMessageId === latest)).toBe(true);
-    for (const o of await planner(request, session.sessionId)) expect(o.assessment.currentMessageId).toBe(latest);
-  });
-
-  test("verification needs the server-issued challenge; duplicate events apply once; inapplicable events are 422", async ({ request }) => {
-    const { session } = await create(request);
-    const key = randomUUID();
-    const opened = await okBody(await act(request, session.sessionId, { type: "official_directory_opened", requestId: null }, key));
-    const again = await okBody(await act(request, session.sessionId, { type: "official_directory_opened", requestId: null }, key));
-    expect(again).toMatchObject({ duplicate: true, challengeId: opened.challengeId });
-    expect(again.session.events).toHaveLength(1);
-    expect(opened.session.requestStates.every((s) => s.inAppVerification.status === "directory_opened")).toBe(true);
-
-    const forged = await act(request, session.sessionId, { type: "official_verification_completed", requestId: null, challengeId: "forged" });
-    expect(forged.status()).toBe(422);
-    expect(ApiErrorResponseSchema.parse(await forged.json()).error.reason).toBe("CHALLENGE_INVALID");
-    const done = await okBody(await act(request, session.sessionId, { type: "official_verification_completed", requestId: null, challengeId: opened.challengeId }));
-    expect(done.session.requestStates.every((s) => s.inAppVerification.status === "completed")).toBe(true);
-
-    const wrong = await act(request, session.sessionId, { type: "simulated_payment_approved", requestId: codeOf(session).id });
-    expect(ApiErrorResponseSchema.parse(await wrong.json()).error.reason).toBe("WRONG_REQUEST_TYPE");
-    const smuggled = await request.post(`/api/observer/sessions/${session.sessionId}/events`, { headers, data: { idempotencyKey: randomUUID(), type: "practice_code_submitted", requestId: codeOf(session).id, code: "123456" } });
-    expect(smuggled.status()).toBe(400);
+    expect((await plans(request, session.sessionId)).filter((p) => p.status === "committed")).toHaveLength(1);
   });
 
   test("ownership: other identities get 404 everywhere; malformed ids 404; cross-origin writes 403", async ({ request, playwright }) => {
@@ -151,8 +128,10 @@ test.describe("observer API", () => {
       await stranger.get(base),
       await stranger.get(`${base}/assessments`),
       await stranger.get(`${base}/planner`),
+      await stranger.get(`${base}/plans`),
       await stranger.post(`${base}/messages`, { headers, data: { idempotencyKey: randomUUID(), content: "hi" } }),
       await stranger.post(`${base}/events`, { headers, data: { idempotencyKey: randomUUID(), type: "conversation_ended", requestId: null } }),
+      await stranger.post(`${base}/retry`, { headers, data: { idempotencyKey: randomUUID() } }),
       await stranger.post(`${base}/process`, { headers }),
       await request.get("/api/observer/sessions/not-a-uuid"),
     ]) {

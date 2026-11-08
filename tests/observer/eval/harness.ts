@@ -1,7 +1,7 @@
 import { ObserverInputSchema, type DecisionLabel, type ObserverInput } from "@/contracts/observer";
 import { RUBRIC, RUBRIC_VERSION } from "@/server/observer/rubric";
 import type { RunOutcome } from "@/server/observer/run";
-import { OPENING } from "@/server/observer/service";
+import { LEGACY_OPENING, LEGACY_SCENARIO } from "../../unit/observer/legacy-scenario";
 import type { EvalCase } from "./dataset";
 
 const T0 = Date.parse("2026-11-07T12:00:00.000Z");
@@ -10,23 +10,25 @@ const iso = (n: number) => new Date(T0 + n * 1000).toISOString();
 /** The same input the service would build: fixed opening, context turns, then the reply under assessment. */
 export function buildEvalInput(c: EvalCase): ObserverInput {
   const sessionId = `eval-${c.id}`;
-  const opening = { id: "m-0", sessionId, turn: 0, role: "assistant" as const, content: OPENING.content, createdAt: iso(0) };
+  const opening = { id: "m-0", sessionId, turn: 0, role: "assistant" as const, content: LEGACY_OPENING, createdAt: iso(0) };
   let turn = 0;
   const context = c.context.map((m, i) => {
     if (m.role === "user") turn++;
     return { id: `m-${i + 1}`, sessionId, turn, role: m.role, content: m.content, createdAt: iso(i + 1) };
   });
   const reply = { id: `m-${context.length + 1}`, sessionId, turn: turn + 1, role: "user" as const, content: c.reply, createdAt: iso(context.length + 1) };
-  const spec = OPENING.requests.find((r) => r.targetAction === c.target)!;
+  const spec = LEGACY_SCENARIO.openingRequests.find((r) => r.targetAction === c.target)!;
   return ObserverInputSchema.parse({
     sessionId,
     turn: reply.turn,
     basedOnRevision: 1,
     currentMessageId: reply.id,
+    scope: "request",
     request: { id: c.target === "share_fictional_code" ? "r-code" : "r-pay", introducedByMessageId: "m-0", targetAction: c.target, description: spec.description, status: "open" },
     relevantMessages: [opening, ...context, reply],
     previousAssessment: null,
     relevantEvents: [],
+    knownIssues: [],
     rubricVersion: RUBRIC_VERSION,
     rubric: RUBRIC,
   });

@@ -14,7 +14,7 @@ import { readModelConfig, stripThinking, type ModelConfig } from "@/server/game/
  * has a finite timeout. Transport failures are returned, never retried here.
  */
 
-export type ModelStage = "observer" | "repair" | "reviewer";
+export type ModelStage = "observer" | "repair" | "reviewer" | "planner" | "planner_repair" | "actor" | "actor_repair";
 
 export type StructuredRequest = {
   stage: ModelStage;
@@ -191,6 +191,30 @@ export function parseCompletion(json: unknown, schemaName: string): StructuredRe
   const extracted = content ? extractJsonObject(content) : undefined;
   if (extracted !== undefined) return { ok: true, output: extracted };
   return { ok: false, failure: "malformed_output", detail: "No structured output was returned.", rawOutput: content.slice(0, RAW_LIMIT) };
+}
+
+export type PlannerModelConfig = { planner: ModelConfig | null; actor: ModelConfig | null; mode: StructuredMode; timeoutMs: number };
+
+/**
+ * Planner/actor models (planner brief §9): same provider env; PLANNER_MODEL_ID / ACTOR_MODEL_ID optionally
+ * select other models. 20 s default timeout per call (PLANNER_TIMEOUT_MS, 1000–60000). No SDK retries.
+ */
+export function readPlannerModelConfig(env: Record<string, string | undefined> = process.env): PlannerModelConfig {
+  const base = readModelConfig(env);
+  const timeout = Number(env.PLANNER_TIMEOUT_MS);
+  return {
+    planner: base ? { ...base, modelId: env.PLANNER_MODEL_ID?.trim() || base.modelId } : null,
+    actor: base ? { ...base, modelId: env.ACTOR_MODEL_ID?.trim() || base.modelId } : null,
+    mode: env.OBSERVER_STRUCTURED_MODE === "json_schema" ? "json_schema" : "tool",
+    timeoutMs: Number.isFinite(timeout) && timeout >= 1000 && timeout <= 60_000 ? timeout : 20_000,
+  };
+}
+
+export function plannerModels(config = readPlannerModelConfig()): { planner: StructuredModel | null; actor: StructuredModel | null } {
+  return {
+    planner: config.planner ? new OpenAICompatibleStructuredModel(config.planner, { mode: config.mode }) : null,
+    actor: config.actor ? new OpenAICompatibleStructuredModel(config.actor, { mode: config.mode }) : null,
+  };
 }
 
 /** Factory used by the runtime. Null when unconfigured: the observer then records an unclear fallback. */
