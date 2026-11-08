@@ -42,6 +42,7 @@ export const MoveIdSchema = z.enum([
   "continue_premise",
   "present_code_request",
   "address_doubt",
+  "back_off_doubt",
   "acknowledge_refusal",
 ]);
 export type MoveId = z.infer<typeof MoveIdSchema>;

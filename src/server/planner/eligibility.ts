@@ -39,6 +39,7 @@ export const MOVES: Record<MoveId, Move> = {
   continue_premise: { action: "continue_scenario", facts: ["F01", "F02", "F03"], additions: ["case_reference", "team_label"], styles: BOTH, maxWords: 70, toolIntent: "none", focus: "continue_premise" },
   present_code_request: { action: "present_simulated_request", facts: ["F03", "F04"], additions: [], styles: BOTH, maxWords: 70, toolIntent: "present_practice_code_request", focus: "present_request" },
   address_doubt: { action: "respond_to_objection", facts: ["F01", "F03"], additions: ["team_label"], styles: BOTH, maxWords: 70, toolIntent: "none", focus: "answer_target" },
+  back_off_doubt: { action: "acknowledge_boundary", facts: [], additions: [], styles: CONCISE, maxWords: 40, toolIntent: "none", focus: "acknowledge_boundary" },
   acknowledge_refusal: { action: "acknowledge_boundary", facts: [], additions: [], styles: CONCISE, maxWords: 40, toolIntent: "none", focus: "acknowledge_boundary" },
 };
 
@@ -113,6 +114,7 @@ function exclusion(ctx: PlanningContext, d: Draft): string | null {
     case "present_code_request":
       return ctx.request || h.some((p) => p.moveId === "present_code_request") ? "the request was already presented" : null;
     case "acknowledge_refusal":
+      if (!d.requestId && h.some((p) => p.moveId === "acknowledge_refusal" && !p.requestId)) return "conversation decline already acknowledged";
       return h.some((p) => p.moveId === "acknowledge_refusal" && evidenceKey(p.evidenceRefs) === key) ? "this refusal was already acknowledged" : null;
     case "continue_premise": {
       if (h.filter((p) => p.moveId === "continue_premise").length >= 2) return "continue_premise used twice this session";
@@ -120,6 +122,8 @@ function exclusion(ctx: PlanningContext, d: Draft): string | null {
     }
     case "address_doubt":
       return h.some((p) => p.moveId === "address_doubt" && p.issueId === d.issueId) ? "doubt already addressed for this issue" : null;
+    case "back_off_doubt":
+      return h.some((p) => p.moveId === "back_off_doubt") ? "proof limit already acknowledged; await the user's next action" : null;
     case "answer_identity":
     case "answer_procedure":
       // Conditional-table answers (no issue): once per condition evidence.
@@ -159,7 +163,9 @@ function issueDrafts(ctx: PlanningContext, issue: IssueRecord): Draft[] {
     case "identity_question": {
       const drafts: Draft[] = [{ ...base, moveId: "answer_identity" }];
       const asksProof = ctx.assessment?.final.verificationObservations.some((o) => o.behavior === "requested_sender_proof" && o.evidence.some((e) => refs.some((r) => r.id === e.messageId)));
-      if (OBJECTION.test(quotes(issue.evidence)) || asksProof) drafts.push({ ...base, moveId: "address_doubt" });
+      const challenge = OBJECTION.test(quotes(issue.evidence)) || asksProof;
+      if (challenge && ctx.doubtBoundaryGiven) return [{ ...base, moveId: "back_off_doubt" }];
+      if (challenge) drafts.push({ ...base, moveId: "address_doubt" });
       return drafts;
     }
     case "procedure_question":
@@ -195,6 +201,8 @@ export function getEligibleCandidates(ctx: PlanningContext): Eligibility {
   // P3: open issues restrict this turn to answering/clarifying them (oldest first, max five candidates).
   const open = ctx.issues.filter((i) => i.status === "open");
   if (open.length) return finish(ctx, "P3", open.flatMap((i) => issueDrafts(ctx, i)), "Open issues", MAX_ISSUE_CANDIDATES);
+
+  if (!pending && ctx.conversationDeclined) return finish(ctx, "P5", [{ moveId: "acknowledge_refusal", ruleId: "P5", requestId: null, issueId: null, refs: current }], "Opening invitation declined");
 
   const label = a.final.decision.label;
   // P4: conditional acceptance table.

@@ -1,6 +1,7 @@
 import type { AssessmentScope, IssueRecord, ObserverAssessment, PlannerRequestStatus, Resolution, SessionStage } from "@/contracts/observer";
 import type { Action, AdditionId, EvidenceRef, MoveId, PlannerAddition } from "@/contracts/planner";
 import { publicIssue, requestStatusOf, stopConfirmationPending } from "@/server/observer/state";
+import { normalizeForScan } from "@/server/observer/flags";
 import type { Snapshot } from "@/server/observer/store/types";
 import { additionsFor, scenarioById, type MoveRegistry } from "./scenario";
 
@@ -32,6 +33,10 @@ export type PlanningContext = {
   rejectionEventIds: string[];
   /** Committed plans, oldest first, with the SERVER candidate's evidence (not model-chosen refs). */
   history: PlanHistoryEntry[];
+  /** A committed sender reply already explained that this chat cannot prove sender identity. */
+  doubtBoundaryGiven: boolean;
+  /** A short explicit decline to the sender's preceding invitation to talk. */
+  conversationDeclined: boolean;
   additions: PlannerAddition[];
   /** The session scenario's candidate registry (null: every move with default facts). */
   moves: MoveRegistry | null;
@@ -48,6 +53,7 @@ export function triggerOf(s: Snapshot): PlanningContext["trigger"] {
 export function derivePlanningContext(s: Snapshot, maxUserTurns: number): PlanningContext {
   const { request, status } = requestStatusOf(s);
   const latestUser = [...s.messages].reverse().find((m) => m.role === "user");
+  const precedingAssistant = latestUser ? [...s.messages].reverse().find((m) => m.role === "assistant" && m.revision < latestUser.revision) : null;
   const applied = s.assessments.filter((a) => a.application === "applied");
   const latest = latestUser ? [...applied].reverse().find((a) => a.currentMessageId === latestUser.id) : undefined;
   const introduced = new Set<AdditionId>(s.additions.filter((a) => a.introducedMessageId !== null).map((a) => a.id));
@@ -71,6 +77,8 @@ export function derivePlanningContext(s: Snapshot, maxUserTurns: number): Planni
         const c = p.candidateSnapshot.find((x) => x.id === p.acceptedPlan!.candidateId)!;
         return { moveId: c.moveId, action: c.action, requestId: c.requestId, issueId: c.issueId, evidenceRefs: c.evidenceRefs };
       }),
+    doubtBoundaryGiven: s.messages.some((m) => m.role === "assistant" && /\b(?:can'?t|cannot|doesn'?t|does not)\s+(?:prove|confirm|establish)\b/.test(normalizeForScan(m.content))),
+    conversationDeclined: Boolean(latestUser && precedingAssistant?.content.trim().endsWith("?") && /^(?:no(?: thanks| thank you)?|nope|nah|not interested|i'?m not interested)[.! ]*$/.test(normalizeForScan(latestUser.content).trim())),
     additions: additionsFor(s.session.caseReference, introduced),
   };
 }

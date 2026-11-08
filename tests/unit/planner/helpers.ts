@@ -68,6 +68,8 @@ export function ctx(over: Partial<PlanningContext> & { a?: Partial<ObserverAsses
     issues: [],
     rejectionEventIds: [],
     history: [],
+    doubtBoundaryGiven: false,
+    conversationDeclined: false,
     additions: additionsFor("CD-123456", new Set()),
     ...rest,
   };

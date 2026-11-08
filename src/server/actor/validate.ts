@@ -16,7 +16,7 @@ export type ActorValidationContext = {
  */
 export function contentPolicyFor(input: ActorInput): ContentPolicy {
   const i = input.instruction;
-  return { allowCodeRequest: input.persona.scenarioId === "mobile-code-01" && (i.toolIntent === "present_practice_code_request" || i.target.requestId !== null) };
+  return { allowCodeRequest: input.persona.scenarioId === "mobile-code-01" && i.moveId !== "back_off_doubt" && (i.toolIntent === "present_practice_code_request" || i.target.requestId !== null) };
 }
 
 export type ValidatedActorOutput = ActorValidation & { output: ActorOutput | null };
@@ -87,11 +87,7 @@ export function validateActorOutput(raw: unknown, input: ActorInput, ctx: ActorV
   // through the same single repair as any other violation (no extra generation loop). Short acknowledgments
   // ("Understood.") may legitimately recur, so only replies of six or more words count.
   const comparable = (t: string) => t.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-  const latestUser = [...input.contextMessages].reverse().find((m) => m.role === "user")?.text ?? "";
-  const repeatedHonestLimit = (i.moveId === "address_doubt" || i.moveId === "answer_identity")
-    && /\b(?:prove|proof|how do i know|really from|actually from|liar|lying)\b/i.test(latestUser)
-    && /\b(?:can'?t|cannot|doesn'?t|does not)\s+(?:prove|confirm|establish)\b/i.test(text);
-  if (!repeatedHonestLimit && comparable(text).split(" ").length >= 6 && input.recentActorMessages.some((m) => comparable(m.text) === comparable(text))) violations.push({ code: "prohibited_content", field: "text", detail: "CR7_repeated_reply", offendingExcerpt: text.slice(0, 120) });
+  if (comparable(text).split(" ").length >= 6 && input.recentActorMessages.some((m) => comparable(m.text) === comparable(text))) violations.push({ code: "prohibited_content", field: "text", detail: "CR7_repeated_reply", offendingExcerpt: text.slice(0, 120) });
   violations.push(...gateViolations(ctx.state, i.basedOnRevision));
   return { valid: violations.length === 0, violations, output: violations.length ? null : SharedOutputSchema.parse(out) };
 }

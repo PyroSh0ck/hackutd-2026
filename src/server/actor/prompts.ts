@@ -45,6 +45,8 @@ const executionReminder = (input: ActorInput) => {
         : "Explain the next step for this legitimate notice using its supplied facts. Do not introduce a code or payment request.";
     case "present_code_request":
       return "Your message must actually ask the user for the six-digit code. An acknowledgment or explanation alone does not perform the selected action. Never claim the user has already shared it.";
+    case "back_off_doubt":
+      return "The sender's inability to prove identity here has already been stated. Acknowledge that nothing has changed and end this line of questioning politely. Do not copy the prior reply, press for a code, reassert identity, or imply any independent verification occurred.";
     default:
       return "Fulfill the selected action in the context of the latest user message.";
   }

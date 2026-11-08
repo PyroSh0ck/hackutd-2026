@@ -31,7 +31,8 @@
     "spacetime:typecheck": "tsc --noEmit -p spacetime/tsconfig.json",
     "test:live": "playwright test --config playwright.live.config.ts",
     "test:spacetime": "vitest run --config vitest.spacetime.config.mts",
-    "practice:smoke": "tsx --conditions=react-server scripts/practice-smoke.ts"
+    "practice:smoke": "tsx --conditions=react-server scripts/practice-smoke.ts",
+    "practice:skeptical": "tsx --conditions=react-server scripts/skeptical-smoke.ts"
   },
   "dependencies": {
     "@better-auth/prisma-adapter": "1.7.15",

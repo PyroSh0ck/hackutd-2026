@@ -36,6 +36,13 @@ describe("Stage 2: priority gates (planner brief §6)", () => {
     expect(getEligibleCandidates(ctx({ resolution: "unclear_fallback" }))).toMatchObject({ kind: "wait", ruleId: "P2" });
   });
 
+  it("acknowledges a clear decline of the opening invitation once instead of continuing the premise", () => {
+    const declined = ctx({ conversationDeclined: true });
+    expect(moves(getEligibleCandidates(declined))).toEqual(["acknowledge_refusal"]);
+    const after = ctx({ history: [past("acknowledge_refusal")], conversationDeclined: true });
+    expect(getEligibleCandidates(after)).toMatchObject({ kind: "wait" });
+  });
+
   it("P3 issue kinds map to answer/clarify moves with their catalog facts", () => {
     const issues = [
       issue("identity_question", "Who are you?"),
@@ -185,6 +192,16 @@ describe("Stage 2: priority gates (planner brief §6)", () => {
   it("address_doubt at most once per issue", () => {
     const i = issue("identity_question", "You're lying, this is fake.");
     expect(moves(getEligibleCandidates(ctx({ issues: [i], history: [past("address_doubt", { issueId: i.id })] })))).toEqual(["answer_identity"]);
+  });
+
+  it("backs off once after a committed proof limit, then waits instead of answering the same challenge again", () => {
+    const current = issue("identity_question", "Prove you are really from Cedar.");
+    const first = ctx({ issues: [current], history: [past("address_doubt", { issueId: "i-old" })] });
+    first.doubtBoundaryGiven = true;
+    expect(moves(getEligibleCandidates(first))).toEqual(["back_off_doubt"]);
+    const repeated = ctx({ issues: [current], history: [past("address_doubt", { issueId: "i-old" }), past("back_off_doubt", { issueId: current.id })], doubtBoundaryGiven: true });
+    expect(getEligibleCandidates(repeated)).toMatchObject({ kind: "wait" });
+    expect(moves(getEligibleCandidates(ctx({ issues: [issue("identity_question", "Who are you?")] })))).toEqual(["answer_identity"]);
   });
 });
 

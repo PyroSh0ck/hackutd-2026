@@ -119,7 +119,7 @@ export const MOBILE_NOTICE_SCENARIO: ScenarioDefinition = {
   kind: "legitimate",
   facts: NOTICE_FACTS,
   moves: {
-    allowed: ["answer_identity", "answer_procedure", "answer_scenario_fact", "acknowledge_refusal"],
+    allowed: ["answer_identity", "answer_procedure", "answer_scenario_fact", "back_off_doubt", "acknowledge_refusal"],
     facts: { answer_identity: ["L02"], answer_procedure: ["L03", "L04"], answer_scenario_fact: ["L01", "L03", "L04"], acknowledge_refusal: ["L03"] },
     additions: {},
   },

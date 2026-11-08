@@ -14,7 +14,7 @@ const payload = (request: StructuredRequest) => {
   const user = request.user.endsWith(ACTOR_JSON_ONLY) ? request.user.slice(0, -ACTOR_JSON_ONLY.length) : request.user;
   return JSON.parse(user.slice(user.indexOf("\n") + 1));
 };
-const PRIORITY: Candidate["moveId"][] = ["answer_identity", "answer_procedure", "answer_scenario_fact", "address_doubt", "clarify_condition", "clarify_decision", "clarify_claimed_check", "acknowledge_refusal", "present_code_request", "continue_premise"];
+const PRIORITY: Candidate["moveId"][] = ["answer_identity", "answer_procedure", "answer_scenario_fact", "address_doubt", "back_off_doubt", "clarify_condition", "clarify_decision", "clarify_claimed_check", "acknowledge_refusal", "present_code_request", "continue_premise"];
 const failedOnce = new Set<string>();
 
 /** Test-only hold for "[[slow]]" inputs. */
@@ -62,7 +62,8 @@ const TEXT: Record<Candidate["moveId"], (i: ActorInstruction) => string> = {
   continue_premise: () => "I'm following up on the security check for your mobile line ending 0142.",
   present_code_request: () => "To finish the security check, please share the six-digit code we texted to your phone.",
   address_doubt: () => "I understand the doubt. I can only tell you I'm Avery from Cedar Account Support.",
-  acknowledge_refusal: () => "Understood. I won't ask you for it again.",
+  back_off_doubt: () => "I understand that my answer hasn't settled your concern. I'll leave it there.",
+  acknowledge_refusal: (i) => i.target.requestId ? "Understood. I won't ask you for it again." : "Understood. I'll leave it there.",
 };
 
 const ALT: Partial<Record<Candidate["moveId"], string>> = {
