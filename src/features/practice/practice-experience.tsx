@@ -25,6 +25,9 @@ const OUTCOME_TEXT: Record<Outcome, string> = {
   simulated_exposure: "You shared the fictional practice code. Simulated exposure.",
   inconclusive: "The practice reached its turn limit without a decision. Inconclusive.",
   technical_interruption: "The practice stopped because of a technical problem. Nothing was decided.",
+  legitimate_task_completed: "You checked with official support, then reviewed the genuine notice in the account portal.",
+  benign_task_completed_unverified: "You reviewed the genuine notice through the trusted account portal without completing the support check.",
+  legitimate_request_declined: "You declined a genuine notice. Nothing was at risk; caution with unexpected messages is reasonable.",
 };
 
 const readStored = () => {

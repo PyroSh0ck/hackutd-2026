@@ -11,7 +11,8 @@ import {
   type SubmitMessageRequest,
 } from "@/contracts/observer";
 import type { ExplainResponse } from "@/contracts/explain";
-import type { HistoryResponse, ProgressResponse } from "@/contracts/history";
+import type { AccountResponse, HistoryResponse, ProgressResponse } from "@/contracts/history";
+import { publicDirectory } from "@/server/reference/catalog";
 import { pageOf, progressOf, type Cursor } from "@/server/engine/history";
 import type { Eligibility, PlanRecord } from "@/contracts/planner";
 import { HttpError, NotFoundError } from "@/server/http/errors";
@@ -83,6 +84,8 @@ export type ObserverServiceOptions = {
   newId?: () => string;
   now?: () => Date;
   leaseMs?: number;
+  /** Scenario ids new sessions may use (selection among them). Unset: always the default scenario. */
+  enabledScenarios?: readonly string[];
   /** Developer trace (agent lab). Never changes behavior. */
   trace?: TraceSink;
 };
@@ -171,7 +174,8 @@ export class ObserverService {
     return {
       sessionId: s.session.id,
       threadId: s.session.threadId,
-      scenario: { id: s.session.scenarioId, version: s.session.scenarioVersion, senderName: this.scenarioOf(s).senderName, simulationNotice: this.scenarioOf(s).simulationNotice },
+      // The scenario id names its kind, so it stays opaque until the session has ended (review).
+      scenario: { id: s.session.ended ? s.session.scenarioId : "practice", version: s.session.ended ? s.session.scenarioVersion : 0, senderName: this.scenarioOf(s).senderName, simulationNotice: this.scenarioOf(s).simulationNotice },
       revision: s.session.revision,
       conversationRevision: s.session.conversationRevision,
       turn: s.session.turn,
@@ -258,6 +262,20 @@ export class ObserverService {
     };
   }
 
+  /**
+   * The trusted in-app account (brief §3): the fictional practice profile plus the notices that genuinely
+   * exist for this session's scenario. A fraud scenario has none. Opened/reviewed state comes from events.
+   */
+  async account(ownerKey: string, sessionId: string): Promise<AccountResponse> {
+    const s = await this.owned(ownerKey, sessionId);
+    const portal = this.scenarioOf(s).portal;
+    const opened = (id: string) => s.events.some((e) => e.type === "portal_record_opened" && e.detail === id);
+    return {
+      profile: publicDirectory().profile,
+      notices: portal ? [{ id: portal.id, title: portal.title, summary: opened(portal.id) ? portal.summary : null, actionLabel: portal.actionLabel, opened: opened(portal.id), reviewed: s.events.some((e) => e.type === "portal_notice_reviewed" && e.detail === portal.id) }] : [],
+    };
+  }
+
   /** Owner-scoped history from the authoritative backend, newest first, with an opaque cursor. */
   async history(ownerKey: string, limit: number, cursor: string | undefined): Promise<HistoryResponse> {
     let decoded: Cursor | null = null;
@@ -290,8 +308,14 @@ export class ObserverService {
 
   // ------------------------------------------------------------------ writes
 
-  async createSession(ownerKey: string): Promise<ObserverSessionResponse> {
-    const id = await this.backend.createSession(ownerKey);
+  /**
+   * New session. Without options the configured default scenario is used (backward compatible). With
+   * `enabledScenarios` configured, `selection` picks among them (default mixed); an explicit `scenarioId`
+   * must already have been authorized by the caller (test/admin gating in the route).
+   */
+  async createSession(ownerKey: string, options: { selection?: "mixed" | "recommended"; scenarioId?: string } = {}): Promise<ObserverSessionResponse> {
+    const enabled = this.options.enabledScenarios;
+    const id = await this.backend.createSession(ownerKey, enabled?.length ? { enabled, selection: options.selection ?? "mixed", ...(options.scenarioId ? { scenarioId: options.scenarioId } : {}) } : undefined);
     return this.getSession(ownerKey, id);
   }
 
@@ -363,7 +387,7 @@ export class ObserverService {
   async submitEvent(ownerKey: string, sessionId: string, request: SubmitEventRequest): Promise<ObserverSessionResponse> {
     await this.owned(ownerKey, sessionId);
     // The practice code is checked but never hashed or stored: the receipt binds only its presence.
-    const payloadHash = hashOf({ kind: "event", type: request.type, requestId: request.requestId, challengeId: request.challengeId ?? null, code: Boolean(request.practiceCode), linkedIssueId: request.linkedIssueId ?? null });
+    const payloadHash = hashOf({ kind: "event", type: request.type, requestId: request.requestId, challengeId: request.challengeId ?? null, code: Boolean(request.practiceCode), linkedIssueId: request.linkedIssueId ?? null, recordId: request.recordId ?? null });
     const result = await this.write(() => this.backend.submitEvent(sessionId, request, payloadHash));
     if (result.kind === "duplicate") {
       if (result.receipt.payloadHash !== payloadHash) throw idempotencyConflict();

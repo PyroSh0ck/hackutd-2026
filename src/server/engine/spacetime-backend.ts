@@ -5,7 +5,7 @@ import type { AssessmentRecord, SubmitEventRequest } from "@/contracts/observer"
 import type { PlanRecord } from "@/contracts/planner";
 import type { ApplyResult, Snapshot } from "@/server/observer/store/types";
 import type { SessionSummary } from "./history";
-import type { CommitPreparedResult, EventResult, MessageResult, RetryResult, TrainingBackend } from "./backend";
+import type { CommitPreparedResult, CreateChoice, EventResult, MessageResult, RetryResult, TrainingBackend } from "./backend";
 
 /**
  * TrainingBackend over the SCAMPER SpacetimeDB module (`spacetime/`). Every command is one procedure call;
@@ -86,8 +86,15 @@ export class SpacetimeBackend implements TrainingBackend {
     return this.must<SessionSummary[]>("listSessions", { ownerKey });
   }
 
-  async createSession(ownerKey: string) {
-    return (await this.must<{ sessionId: string }>("startSession", { ownerKey })).sessionId;
+  async createSession(ownerKey: string, choice?: CreateChoice) {
+    return (
+      await this.must<{ sessionId: string }>("startSession", {
+        ownerKey,
+        enabled: (choice?.enabled ?? ["mobile-code-01"]).join(","),
+        selection: choice?.selection ?? "mixed",
+        scenarioId: option(choice?.scenarioId),
+      })
+    ).sessionId;
   }
 
   submitMessage(sessionId: string, input: { key: string; content: string; payloadHash: string }) {
@@ -103,6 +110,7 @@ export class SpacetimeBackend implements TrainingBackend {
       challengeId: option(request.challengeId),
       practiceCode: option(request.practiceCode),
       linkedIssueId: option(request.linkedIssueId),
+      recordId: option(request.recordId),
       payloadHash,
     });
   }

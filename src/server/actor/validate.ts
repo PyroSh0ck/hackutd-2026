@@ -70,7 +70,8 @@ export function validateActorOutput(raw: unknown, input: ActorInput, ctx: ActorV
   // Exempt exact approved numeric tokens BEFORE numeric scanning, never arbitrary digit substrings.
   const numericSpans: Array<[number, number]> = [];
   for (const match of text.matchAll(/\b0142\b|\bCD-\d+\b/gu)) {
-    if (match[0] === "0142" && i.facts.some((f) => f.id === "F02") || match[0] === reference && i.additions.some((a) => a.id === "case_reference")) numericSpans.push([match.index!, match.index! + match[0].length]);
+    // The practice line suffix is exempt only when a selected fact states it (F02, or L02 in the notice scenario).
+    if (match[0] === "0142" && i.facts.some((f) => f.text.includes("0142")) || match[0] === reference && i.additions.some((a) => a.id === "case_reference")) numericSpans.push([match.index!, match.index! + match[0].length]);
   }
   const numericText = text.split("").map((char, index) => numericSpans.some(([start, end]) => index >= start && index < end) ? " " : char).join("").normalize("NFKC");
   if (/(?:\+?\d[\d\s().-]{3,}\d)/u.test(numericText) || /\b\d{4,}\b/u.test(numericText)) add("unapproved_destination", "text", "Phone-like numeric destinations are not allowed.");

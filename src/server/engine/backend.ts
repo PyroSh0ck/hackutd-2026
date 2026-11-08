@@ -1,9 +1,10 @@
 import type { AssessmentRecord, SubmitEventRequest } from "@/contracts/observer";
 import type { PlanRecord } from "@/contracts/planner";
-import { scenarioById, secureRandom, type ScenarioDefinition } from "@/server/planner/scenario";
+import { SCENARIOS, scenarioById, secureRandom, type ScenarioDefinition } from "@/server/planner/scenario";
 import type { StopIntent } from "@/server/planner/stop-intent";
 import type { ApplyResult, CommitResult, InputChange, ObserverStore, Receipt, Snapshot } from "@/server/observer/store/types";
 import type { SessionSummary } from "./history";
+import { selectScenario, type Selection } from "./selection";
 import { decideAfterEnd, decideCommit, decideCreate, decideEvent, decideIssues, decideMessage, decideRetry, decideTechnicalFailure, decideTurnLimit, type Env, type Rejection } from "./decide";
 
 /**
@@ -28,7 +29,11 @@ export interface TrainingBackend {
   load(sessionId: string): Promise<Snapshot | null>;
   /** The owner's sessions from the authoritative backend (never from browser storage). */
   listSessions(ownerKey: string): Promise<SessionSummary[]>;
-  createSession(ownerKey: string): Promise<string>;
+  /**
+   * Creates a session for one enabled scenario, chosen by the backend (mixed: its randomness; recommended:
+   * the owner's history it holds). `scenarioId` is an already-authorized test/admin override.
+   */
+  createSession(ownerKey: string, choice?: CreateChoice): Promise<string>;
   submitMessage(sessionId: string, input: { key: string; content: string; payloadHash: string }): Promise<MessageResult>;
   submitEvent(sessionId: string, request: SubmitEventRequest, payloadHash: string): Promise<EventResult>;
   retry(sessionId: string, input: { key: string; payloadHash: string }): Promise<RetryResult>;
@@ -43,6 +48,8 @@ export interface TrainingBackend {
   recordTechnicalFailure(sessionId: string, record: PlanRecord, inputId: string, attempt: 1 | 2): Promise<void>;
 }
 
+export type CreateChoice = { enabled: readonly string[]; selection: Selection; scenarioId?: string };
+
 export class VersionConflictError extends Error {
   constructor() {
     super("The conversation is busy. Try again.");
@@ -50,6 +57,11 @@ export class VersionConflictError extends Error {
 }
 
 const APPEND_ATTEMPTS = 5;
+const fail = (message: string): never => {
+  throw new Error(message);
+};
+/** Highest registered version of a scenario id (new sessions always use the latest immutable version). */
+export const latestVersion = (id: string) => Math.max(1, ...SCENARIOS.filter((s) => s.id === id).map((s) => s.version));
 
 /** Postgres or in-memory persistence; the shared rules run in this process. */
 export class StoreBackend implements TrainingBackend {
@@ -96,9 +108,15 @@ export class StoreBackend implements TrainingBackend {
     return { kind: "ended" };
   }
 
-  async createSession(ownerKey: string) {
+  async createSession(ownerKey: string, choice?: CreateChoice) {
     const id = this.deps.newId();
-    const { session, change } = decideCreate(this.env(), ownerKey, id, this.deps.newId(), this.deps.random ?? secureRandom);
+    const random = this.deps.random ?? secureRandom;
+    let scenario = this.deps.scenario;
+    if (choice) {
+      const enabled = choice.enabled.map((sid) => scenarioById(sid, latestVersion(sid), [this.deps.scenario])).filter((s): s is ScenarioDefinition => s !== null);
+      scenario = choice.scenarioId ? (enabled.find((s) => s.id === choice.scenarioId) ?? fail(`Scenario ${choice.scenarioId} is not enabled.`)) : selectScenario(choice.selection, enabled, await this.store.listSessions(ownerKey), random);
+    }
+    const { session, change } = decideCreate({ ...this.env(), scenario }, ownerKey, id, this.deps.newId(), random);
     await this.store.createSession(session, change);
     return id;
   }

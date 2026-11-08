@@ -166,7 +166,8 @@ export class StoreActorCommitPort implements ActorCommitPort {
 
   async commitValidated(response: PreparedActorResponse) {
     const s = await this.snapshot();
-    if (s.session.ownerKey !== response.envelope.ownerKey || !this.d.scenario.request) return { kind: "stale" as const };
+    // Ownership here; candidate, revision, request authorization and secrets are re-checked by the backend.
+    if (s.session.ownerKey !== response.envelope.ownerKey) return { kind: "stale" as const };
     const record: PlanRecord = {
       ...this.d.record,
       actorOutput: response.output,

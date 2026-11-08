@@ -156,7 +156,7 @@ export type EventRejection =
   | "CODE_REQUIRED"
   | "CODE_MISMATCH"
   | "ISSUE_INVALID"
-  | "NO_REQUEST_AVAILABLE";
+  | "NO_REQUEST_AVAILABLE" | "RECORD_NOT_FOUND" | "RECORD_NOT_OPENED";
 
 type EventDraft = { type: AppEventType; requestId: string | null; challengeId: string | null; detail: string | null };
 
@@ -175,7 +175,15 @@ export type EventPlan =
     }
   | { ok: false; reason: EventRejection; message: string };
 
-export type EventScenario = { request: { targetAction: TargetAction; description: string } | null; officialResultCode: string | null };
+export type EventScenario = {
+  request: { targetAction: TargetAction; description: string } | null;
+  officialResultCode: string | null;
+  kind?: "fraudulent" | "legitimate" | "legacy";
+  portal?: { id: string } | null;
+};
+
+/** The trusted account portal's landing record (every scenario has one; only legitimate ones have a notice). */
+export const ACCOUNT_HOME_RECORD = "account-home";
 
 const terminal = (outcome: Outcome, ev: EventDraft, closeRequestIds: string[] = []): EventPlan => ({ ok: true, events: [ev], primary: 0, closeRequestIds, stage: "ended", outcome, issueChallenge: false });
 
@@ -194,7 +202,8 @@ export function planEvent(s: Pick<Snapshot, "session" | "requests" | "events" | 
 
   if (cmd.type === "conversation_ended" || cmd.type === "conversation_reported") {
     if (cmd.requestId !== null) return no("SESSION_LEVEL_EVENT", "This event applies to the whole conversation.");
-    return terminal(cmd.type === "conversation_reported" ? "defense_demonstrated" : "safely_disengaged", { ...base, detail: cmd.type === "conversation_ended" ? "end_practice_control" : null }, openIds());
+    const reported = scenario.kind === "legitimate" ? "legitimate_request_declined" : "defense_demonstrated";
+    return terminal(cmd.type === "conversation_reported" ? reported : "safely_disengaged", { ...base, detail: cmd.type === "conversation_ended" ? "end_practice_control" : null }, openIds());
   }
   if (cmd.type === "stop_confirmation_dismissed") {
     if (cmd.requestId !== null) return no("SESSION_LEVEL_EVENT", "This event applies to the whole conversation.");
@@ -235,10 +244,28 @@ export function planEvent(s: Pick<Snapshot, "session" | "requests" | "events" | 
       ...(v.linkedIssueId ? { resolveIssueId: v.linkedIssueId } : {}),
     };
   }
+  if (cmd.type === "portal_record_opened" || cmd.type === "portal_notice_reviewed") {
+    if (cmd.requestId !== null) return no("SESSION_LEVEL_EVENT", "This event applies to the whole conversation.");
+    if (stage === "verifying") return no("STAGE_MISMATCH", "Finish or cancel verification first.");
+    const notice = scenario.portal ?? null;
+    if (cmd.type === "portal_record_opened") {
+      if (cmd.recordId !== ACCOUNT_HOME_RECORD && (!notice || cmd.recordId !== notice.id)) return no("RECORD_NOT_FOUND", "That account record does not exist.");
+      return { ok: true, events: [{ ...base, detail: cmd.recordId }], primary: 0, closeRequestIds: [], issueChallenge: false };
+    }
+    // Reviewing the trusted notice is the legitimate task. Opening it first is required; after a completed
+    // check, the explicit Proceed decision must come first. Completion is never automatic.
+    if (!notice || cmd.recordId !== notice.id) return no("RECORD_NOT_FOUND", "That account record does not exist.");
+    if (!s.events.some((e) => e.type === "portal_record_opened" && e.detail === notice.id)) return no("RECORD_NOT_OPENED", "Open the notice in the account portal first.");
+    if (stage === "awaiting_final_decision" && !finalDecisionProceeded(s.events)) return no("PROCEED_REQUIRED", "Choose Proceed first.");
+    const verified = verificationState(s.events).status === "completed";
+    return terminal(verified ? "legitimate_task_completed" : "benign_task_completed_unverified", { ...base, detail: notice.id }, openIds());
+  }
   if (cmd.type === "final_decision_proceed") {
     if (cmd.requestId !== null) return no("SESSION_LEVEL_EVENT", "This event applies to the whole conversation.");
     if (stage !== "awaiting_final_decision") return no("STAGE_MISMATCH", "Proceed is a final decision after verification.");
     if (finalDecisionProceeded(s.events)) return no("ALREADY_PROCEEDED", "You already chose to proceed.");
+    // Legitimate notice: proceeding allows the trusted portal action; it does not complete anything.
+    if (scenario.portal && !scenario.request) return { ok: true, events: [base], primary: 0, closeRequestIds: [], issueChallenge: false };
     const { status } = requestStatusOf(s);
     if (status === "pending") return { ok: true, events: [base], primary: 0, closeRequestIds: [], issueChallenge: false };
     if (status !== "not_presented" || !scenario.request) return no("NO_REQUEST_AVAILABLE", "There is no request to proceed with.");

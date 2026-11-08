@@ -52,6 +52,8 @@ export function observerService(): ObserverService {
         // PLANNER_PROTOCOL=tools: the planner acts through get_training_context / execute_training_move.
         ...(process.env.PLANNER_PROTOCOL === "tools" ? { toolPlanner: () => (fixtureModelsEnabled() ? new FixtureToolPlannerModel() : toolPlannerFromEnv()) } : {}),
       },
+      // PRACTICE_SCENARIOS: comma-separated enabled scenario ids (default: both catalog scenarios).
+      enabledScenarios: (process.env.PRACTICE_SCENARIOS ?? "mobile-code-01,mobile-notice-01").split(",").map((s) => s.trim()).filter(Boolean),
       // Agent lab trace: development or AGENT_DEBUG=1 only (records prompts and raw model output).
       trace: traceEnabled() ? sharedTrace() : undefined,
     });

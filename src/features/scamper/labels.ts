@@ -7,6 +7,9 @@ export const OUTCOME: Record<Outcome, { label: string; tone: "success" | "neutra
   simulated_exposure: { label: "Simulated exposure", tone: "error", summary: "You shared the fictional practice code in the simulation." },
   inconclusive: { label: "Inconclusive", tone: "neutral", summary: "The practice reached its turn limit without a decision." },
   technical_interruption: { label: "Incomplete", tone: "neutral", summary: "The practice stopped because of a technical problem. Nothing was decided." },
+  legitimate_task_completed: { label: "Verified and completed", tone: "success", summary: "You checked with official support, then reviewed the genuine notice in the trusted account portal." },
+  benign_task_completed_unverified: { label: "Completed without the support check", tone: "neutral", summary: "You reviewed the genuine notice through the trusted account portal, but did not complete the official support check first." },
+  legitimate_request_declined: { label: "Genuine notice declined", tone: "neutral", summary: "This notice was genuine. Declining it avoided no harm, but caution with unexpected messages is still reasonable." },
 };
 
 /** Recorded user actions worth showing as review evidence. Server-only events are omitted. */

@@ -88,6 +88,8 @@ export const ClientEventTypeSchema = z.enum([
   "request_rejected",
   "conversation_reported",
   "conversation_ended",
+  "portal_record_opened",
+  "portal_notice_reviewed",
 ]);
 export type ClientEventType = z.infer<typeof ClientEventTypeSchema>;
 
@@ -404,7 +406,22 @@ export type AssessmentRecord = z.infer<typeof AssessmentRecordSchema>;
 export const SessionStageSchema = z.enum(["active", "verifying", "awaiting_final_decision", "ended"]);
 export type SessionStage = z.infer<typeof SessionStageSchema>;
 
-export const OutcomeSchema = z.enum(["defense_demonstrated", "safely_disengaged", "simulated_exposure", "inconclusive", "technical_interruption"]);
+/**
+ * Original meanings are unchanged. The last three apply only to the legitimate notice scenario:
+ * legitimate_task_completed (verified with official support, then reviewed the trusted portal notice),
+ * benign_task_completed_unverified (reviewed the trusted portal notice without completing the support check),
+ * legitimate_request_declined (reported/declined a genuine notice: no harm, but a benign message misjudged).
+ */
+export const OutcomeSchema = z.enum([
+  "defense_demonstrated",
+  "safely_disengaged",
+  "simulated_exposure",
+  "inconclusive",
+  "technical_interruption",
+  "legitimate_task_completed",
+  "benign_task_completed_unverified",
+  "legitimate_request_declined",
+]);
 export type Outcome = z.infer<typeof OutcomeSchema>;
 
 /** Planner-facing request status (adapter over the observer's open/closed request + events). */
@@ -491,6 +508,8 @@ export const SubmitEventRequestSchema = z.strictObject({
   practiceCode: z.string().regex(/^\d{6}$/).optional(),
   /** Optional procedure issue explicitly linked to launching the official verification interface. */
   linkedIssueId: Id.optional(),
+  /** Trusted in-app account record (portal events). The server verifies it exists for this session. */
+  recordId: z.string().min(1).max(100).regex(/^[a-z0-9-]+$/).optional(),
 });
 export type SubmitEventRequest = z.infer<typeof SubmitEventRequestSchema>;
 

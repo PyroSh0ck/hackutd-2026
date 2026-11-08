@@ -30,7 +30,8 @@ import {
 import type { Env } from '@/server/engine/decide';
 import { snapshotOf, type SessionData } from '@/server/engine/ops';
 import { compareSummaries, summaryOf } from '@/server/engine/history';
-import { MOBILE_CODE_SCENARIO, scenarioById } from '@/server/planner/scenario';
+import { MOBILE_CODE_SCENARIO, SCENARIOS, scenarioById, type ScenarioDefinition } from '@/server/planner/scenario';
+import { selectScenario } from '@/server/engine/selection';
 
 // ---------------------------------------------------------------------------------------------- tables
 
@@ -126,6 +127,10 @@ const practiceProgress = table(
     inconclusive: t.u32(),
     technicalInterruption: t.u32(),
     updatedAt: t.timestamp(),
+    // Appended (migration-safe defaults) for the legitimate notice scenario.
+    legitimateTaskCompleted: t.u32().default(0),
+    benignTaskCompletedUnverified: t.u32().default(0),
+    legitimateRequestDeclined: t.u32().default(0),
   }
 );
 
@@ -348,6 +353,9 @@ const PROGRESS_FIELD = {
   simulated_exposure: 'simulatedExposure',
   inconclusive: 'inconclusive',
   technical_interruption: 'technicalInterruption',
+  legitimate_task_completed: 'legitimateTaskCompleted',
+  benign_task_completed_unverified: 'benignTaskCompletedUnverified',
+  legitimate_request_declined: 'legitimateRequestDeclined',
 } as const;
 
 function recordOutcome(tx: Tx, data: SessionData) {
@@ -356,7 +364,7 @@ function recordOutcome(tx: Tx, data: SessionData) {
   const evidence = data.events.filter((e) => e.revision === data.session.revision).map((e) => e.id);
   tx.db.trainingOutcome.insert({ sessionId: data.session.id, ownerKey: data.session.ownerKey, outcome, decidedAt: tx.timestamp, evidenceEventIds: JSON.stringify(evidence) });
   const prev = tx.db.practiceProgress.ownerKey.find(data.session.ownerKey);
-  const base = prev ?? { ownerKey: data.session.ownerKey, completed: 0, defenseDemonstrated: 0, safelyDisengaged: 0, simulatedExposure: 0, inconclusive: 0, technicalInterruption: 0, updatedAt: tx.timestamp };
+  const base = prev ?? { ownerKey: data.session.ownerKey, completed: 0, defenseDemonstrated: 0, safelyDisengaged: 0, simulatedExposure: 0, inconclusive: 0, technicalInterruption: 0, legitimateTaskCompleted: 0, benignTaskCompletedUnverified: 0, legitimateRequestDeclined: 0, updatedAt: tx.timestamp };
   const field = PROGRESS_FIELD[outcome];
   const next = { ...base, completed: base.completed + 1, [field]: base[field] + 1, updatedAt: tx.timestamp };
   if (prev) tx.db.practiceProgress.ownerKey.update(next);
@@ -402,10 +410,36 @@ const invalid = (detail: string): Result => ({ ok: false, error: 'invalid_input'
 
 // ---------------------------------------------------------------------------------------------- procedures
 
-export const startSession = spacetimedb.procedure({ ownerKey: t.string() }, t.string(), (ctx, { ownerKey }) =>
+/** The owner's session summaries from the module's own tables. */
+function ownerSummaries(tx: Tx, ownerKey: string) {
+  return [...tx.db.trainingSession.ownerKey.filter(ownerKey)]
+    .map((s) =>
+      summaryOf(
+        { id: s.id, scenarioId: s.scenarioId, scenarioVersion: s.scenarioVersion, createdAt: s.createdAt, ended: s.ended, stage: s.stage as SessionData['session']['stage'], outcome: nul(s.outcome) as SessionData['session']['outcome'], turn: s.turn },
+        bySeq(tx.db.trainingEvent.sessionId.filter(s.id)).map((e) => ({ type: e.type as SessionData['events'][number]['type'], createdAt: e.createdAt }))
+      )
+    )
+    .sort(compareSummaries);
+}
+
+/**
+ * Starts a session. The module chooses the scenario among the enabled ids (mixed: its own randomness;
+ * recommended: the owner's completions it holds); `scenarioId` is a caller-authorized test/admin override.
+ */
+export const startSession = spacetimedb.procedure(
+  { ownerKey: t.string(), enabled: t.string(), selection: t.string(), scenarioId: t.option(t.string()) },
+  t.string(),
+  (ctx, { ownerKey, enabled, selection, scenarioId }) =>
   run(ctx, (tx) => {
     if (!ownerKey) return invalid('ownerKey is required');
-    const env = envOf(tx);
+    if (selection !== 'mixed' && selection !== 'recommended') return invalid('selection must be mixed or recommended');
+    const latest = (id: string) => SCENARIOS.filter((s) => s.id === id).sort((a, b) => b.version - a.version)[0] ?? null;
+    const scenarios = enabled.split(',').map((id) => latest(id.trim())).filter((s): s is ScenarioDefinition => s !== null);
+    if (!scenarios.length) return invalid('no enabled scenario is known to this module');
+    const forced = scenarioId ? scenarios.find((s) => s.id === scenarioId) : undefined;
+    if (scenarioId && !forced) return invalid(`scenario ${scenarioId} is not enabled`);
+    const scenario = forced ?? selectScenario(selection, scenarios, ownerSummaries(tx, ownerKey), () => tx.random());
+    const env = { ...envOf(tx), scenario };
     const data = cmdCreate(env, ownerKey, uuid(tx), uuid(tx), () => tx.random());
     persist(tx, null, data);
     return { ok: true, result: { sessionId: data.session.id } };
@@ -438,6 +472,7 @@ export const submitTrainingEvent = spacetimedb.procedure(
     challengeId: t.option(t.string()),
     practiceCode: t.option(t.string()),
     linkedIssueId: t.option(t.string()),
+    recordId: t.option(t.string()),
     payloadHash: t.string(),
   },
   t.string(),
@@ -451,6 +486,7 @@ export const submitTrainingEvent = spacetimedb.procedure(
       ...(a.challengeId ? { challengeId: a.challengeId } : {}),
       ...(a.practiceCode ? { practiceCode: a.practiceCode } : {}),
       ...(a.linkedIssueId ? { linkedIssueId: a.linkedIssueId } : {}),
+      ...(a.recordId ? { recordId: a.recordId } : {}),
     };
     return withSession(ctx, a.sessionId, (data, tx) => cmdSubmitEvent(data, request, a.payloadHash, envOf(tx, data)));
   }
@@ -506,16 +542,7 @@ export const recordAgentFailure = spacetimedb.procedure(
 /** The owner's sessions as summaries, from the module's own tables (owner index). */
 export const listSessions = spacetimedb.procedure({ ownerKey: t.string() }, t.string(), (ctx, { ownerKey }) =>
   run(ctx, (tx) => {
-    const summaries = [...tx.db.trainingSession.ownerKey.filter(ownerKey)]
-      .map((s) =>
-        summaryOf(
-          { id: s.id, scenarioId: s.scenarioId, scenarioVersion: s.scenarioVersion, createdAt: s.createdAt, ended: s.ended, stage: s.stage as SessionData['session']['stage'], outcome: nul(s.outcome) as SessionData['session']['outcome'], turn: s.turn },
-          bySeq(tx.db.trainingEvent.sessionId.filter(s.id)).map((e) => ({ type: e.type as SessionData['events'][number]['type'], createdAt: e.createdAt }))
-        )
-      )
-      .sort(compareSummaries)
-      .slice(0, 500);
-    return { ok: true, result: summaries };
+    return { ok: true, result: ownerSummaries(tx, ownerKey).slice(0, 500) };
   })
 );
 
