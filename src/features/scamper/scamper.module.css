@@ -893,3 +893,26 @@
     transition: none !important;
   }
 }
+
+/* Optimistic outgoing message (sending / not sent) and turn status notes. */
+.message[data-state="sending"] .bubble {
+  opacity: 0.75;
+}
+.message[data-state="failed"] .bubble {
+  border-color: var(--sc-error);
+}
+.bubbleActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.statusNote {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--sc-incoming);
+  color: var(--sc-text-muted);
+  font-size: 14px;
+}

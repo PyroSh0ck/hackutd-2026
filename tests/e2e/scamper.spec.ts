@@ -104,7 +104,7 @@ test("End practice ends the session as safely disengaged; Home summary counts it
   await page.getByRole("button", { name: "End practice" }).click();
   await expect(page.getByText("Safely disengaged").first()).toBeVisible();
   await page.getByRole("link", { name: "Home", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Welcome to SCAMPER" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Welcome to Cyber Sleuth" })).toBeVisible();
   await expect(page.getByText("Completed sessions")).toBeVisible();
 });
 
@@ -149,16 +149,19 @@ test("stop while generation is pending: End practice wins; the late reply is nev
   const sent = page.waitForResponse((r) => r.url().endsWith("/messages") && r.request().method() === "POST");
   const startedAt = Date.now();
   await box.press("Enter");
-  // Typing dots are only shown while the real request is running.
-  await expect(page.getByText(/is replying/)).toBeAttached();
+  // The message is recorded and the reply generated after the response; the user bubble shows at once.
+  expect((await sent).status()).toBe(200);
+  const transcript = page.getByRole("list", { name: "Conversation transcript" });
+  await expect(transcript.getByText("[[slow]] Who are you?")).toHaveCount(1);
   // Let the observer finish so the stop lands while the (held) planner/actor generation is in flight.
   await page.waitForTimeout(1500);
+  // Typing dots come from the server's turnStatus ("generating"): the held generation is running right now.
+  await expect(transcript.getByText(/is replying/)).toBeAttached();
   await page.getByRole("button", { name: "End practice" }).click();
   await expect(page.getByText("Safely disengaged").first()).toBeVisible();
-  await sent; // the held generation finishes after the stop
-  expect(Date.now() - startedAt).toBeGreaterThanOrEqual(3500); // the hold really happened (planner was running)
-  await page.waitForTimeout(500);
-  const transcript = page.getByRole("list", { name: "Conversation transcript" });
+  await expect(transcript.getByText(/is replying/)).toHaveCount(0);
+  // Wait until the held generation (SLOW_FIXTURE_MS = 4 s, after the observer) has finished, so a late commit would have happened by now.
+  await page.waitForTimeout(Math.max(0, 7000 - (Date.now() - startedAt)));
   await expect(transcript.getByText(/Avery with Cedar Account Support/)).toHaveCount(0); // no late answer
   await expect(page.getByText("Safely disengaged").first()).toBeVisible();
   // And after a reload the server state agrees: ended, opening message only from the opponent.

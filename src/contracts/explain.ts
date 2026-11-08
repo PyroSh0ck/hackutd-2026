@@ -12,7 +12,11 @@ export const ExplainTurnSchema = z.strictObject({
   observer: z
     .strictObject({
       model: z.string(),
+      /** "conversation": no request existed yet, so a request decision is not applicable. */
+      scope: z.enum(["conversation", "request"]),
       decision: z.string(),
+      /** The model's own label before validation/normalization (audit only). */
+      proposedDecision: z.string().nullable(),
       resolution: z.string(),
       reviewStatus: z.string(),
       evidenceCount: z.number().int().min(0),
@@ -33,6 +37,11 @@ export const ExplainTurnSchema = z.strictObject({
       actorModel: z.string().nullable(),
     })
     .nullable(),
+  /**
+   * Why no reply was committed for this input (null when one was). Derived after the fact from stored
+   * records (observer resolution and observations, the next input, stop/verification events, stale plans).
+   */
+  noReply: z.string().nullable(),
 });
 
 export const ExplainResponseSchema = z.strictObject({

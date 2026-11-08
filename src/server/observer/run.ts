@@ -14,7 +14,7 @@ import {
 } from "@/contracts/observer";
 import { assertObserverInput, contextFor, validateCandidate } from "./evidence";
 import { reviewFlags } from "./flags";
-import { clearConversationDecisionEvidence, pruneUnsupportedIssues } from "./issue-support";
+import { collapseDuplicateIssues, normalizeConversationDecision, pruneUnsupportedIssues } from "./issue-support";
 import { providerSchema, type StructuredModel, type StructuredRequest, type StructuredResult } from "./model";
 import { OBSERVER_SYSTEM_PROMPT, observerUserPrompt, repairUserPrompt, REVIEWER_SYSTEM_PROMPT, reviewerUserPrompt } from "./prompts";
 import { resolveReview, validateReview } from "./review";
@@ -126,7 +126,8 @@ export async function runObserver(input: ObserverInput, deps: RunDeps): Promise<
       validation = { structurallyValid: false, evidenceReferencesValid: false, errors, reviewFlags: [] };
       return { candidate: null, errors, raw: result.rawOutput ?? null };
     }
-    const output = ctx.scope === "conversation" ? clearConversationDecisionEvidence(result.output) : result.output;
+    const deduplicated = collapseDuplicateIssues(result.output);
+    const output = ctx.scope === "conversation" ? normalizeConversationDecision(deduplicated) : deduplicated;
     const v = validateCandidate(output, ctx);
     attempt.validationErrors = v.errors;
     validation = { structurallyValid: v.structurallyValid, evidenceReferencesValid: v.evidenceReferencesValid, errors: v.errors, reviewFlags: [] };

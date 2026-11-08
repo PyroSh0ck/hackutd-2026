@@ -325,3 +325,60 @@ Results (same commit + harness, same models and backend):
   - The same-origin check accepts `x-forwarded-host`.
   - The SpacetimeDB config must come from the env trio, because `.spacetime/` isn't deployed.
 - **Hosted verification not done yet:** the Vercel CLI isn't logged in, and the credentials must be entered by the operator. See the README's "Deploy (Vercel)" section for the exact variables.
+
+## 11. Manual-test fixes (Cyber Sleuth, 2026-11-08)
+
+Brief: `cyber-sleuth-manual-test-fixes.md`. Live = real `nvidia/nemotron-3.5-bolt-e4b`; "local module" = the
+updated module on the local SpacetimeDB (`cyber-sleuth-local`); "Maincloud" = the deployed `cybersleuth-db`
+module, unchanged (every fix below is compatible with it; only the new opening lines need a republish).
+
+### Root causes and fixes
+
+| Finding | Root cause | Fix |
+| --- | --- | --- |
+| User bubble appears only with the reply | The page awaited the whole observer → planner → actor request before rendering anything | `respond: "after_save"` on messages/retry: the route records the message, answers, and runs the same processing in `after()`. Server-derived `turnStatus` on every view. The page shows the bubble at once (one idempotency key per submission, reused by "Send again"), reconciles unknown network outcomes by reading the session, polls while `generating`, nudges `/process` every 20 s, stops after 200 s with "Check again" (`practice.tsx`, `service.ts`) |
+| T14: no reply after refresh | The reply was still generated server-side, but a reloaded page had no way to know a turn was pending and never fetched again | Same `turnStatus`: a reload recovers "generating" from storage and follows it to the reply |
+| T7: silence after "No, I won't send you the code" | Observer labeled the pre-request boundary `refused`; conversation scope requires `unclear`, so validation failed twice → `unclear_fallback` → rule P2 waits silently | `normalizeConversationDecision`: before any request, label → unclear, evidence/condition cleared before validation; the raw label stays in `proposedAssessment` and is shown in the review |
+| T6: silence after "I'll verify first" | Intentional rule wait (P6/P4) that the UI never explained | `turnStatus: paused` with plain-language `message` per rule (`pauseMessage`) shown in the chat |
+| T5/T1: "simulator's request card", "Verify independently control", "practice line" in dialogue | Facts F02/F04/F05, the `answer_procedure` instruction, the card description passed to the actor, and the actor prompt's "use UI labels for directions" | Facts rewritten as labeled in-world data; move instructions in character; card copy no longer sent to the actor; prompt says stay in character; content rule `CR6_breaks_character` (incl. leaked fact ids) goes through the existing single repair |
+| "Okay go ahead" → re-introduction | Observer filed "What do you need from me?" as procedure AND identity; the leftover identity issue forced `answer_identity` next turn | Narrow prune: an identity issue that only re-labels another question's words with no identity/trust cue |
+| "you're lying" → fallback | Observer returned the same issue 5× (validator rejects exact duplicates) | Collapse exact duplicates (same kind + evidence) before validation |
+| Most actor first attempts were prose, not JSON (masked by the repair) | Actor call never turned Nemotron reasoning off (observer/planner do); measured 0/8 → 8/8 on a captured request with the JSON-only closing line | `/no_think` for Nemotron + closing "Respond with only the ActorOutput JSON object."; in-app first-attempt validity 12/12 afterwards |
+| Repeated replies | — | `CR7_repeated_reply` (≥ 6 words, exact repeat of a recent reply) through the same single repair |
+| Audit: absent planner row unexplained | — | Review shows scope ("no request yet"), the model's raw label, "assessment validated" vs "processing fallback", and a derived `noReply` reason (stopped, superseded, P2/P6/P7/P9 wait, discarded stale reply) |
+
+Branding: visible name is **Cyber Sleuth** (wordmark, titles, metadata, home, mascot text, legacy header);
+routes, cookies, database names and API contracts unchanged.
+
+### Before / after (live, same inputs)
+
+| Input | Before (`4d7695c`, Maincloud) | After (local module) |
+| --- | --- | --- |
+| "no" | "Understood. You can choose to Verify independently or End practice." | "Understood. This is just a routine security check for your account." |
+| "liar" | "I understand your statement. This conversation is about an account security check for your practice line." | "I hear your concern about my credibility. This is just a routine security check for your account as Avery from Cedar Account Support." |
+| "What do you need from me?" | "You can ask for the supplied fictional practice code through the simulator's request card. Independent support is available through the app's Verify independently control." | "A six-digit code is texted to the account holder's phone and takes about a minute to complete." |
+| then "Okay go ahead" | "I'm Avery from Cedar Account Support." | "Can you provide the six-digit code that was texted to your phone for this routine security check" (request card presented) |
+| "No, I won't send you the code" (no request yet) | no reply (observer fallback) | "Understood. This is part of a routine security check on your account." |
+| "I'll only do that after I verify this through official support." | no reply, no explanation | no reply by rule P6, chat shows "Cedar Account Support is waiting while you check with official support…" |
+
+### Results
+
+| Check | Mode | Result |
+| --- | --- | --- |
+| `pnpm check` | fixture | 775 tests, lint and typecheck: exit 0 |
+| `pnpm test:integration` | fixture, Postgres | 40/40, exit 0 |
+| `test:spacetime` | fixture, local module | 11 passed, 1 skipped |
+| Spacetime browser flows | fixture, local module | 11 passed |
+| Component tests for immediate bubbles | fixture | 8/8 (delayed save, one bubble, double submit, failed save + same-key resend, unknown outcome reconciled, generation failure → Retry reply, reload mid-turn, stop mid-turn) |
+| API replays T1/T3/T5/T6/T7 + paraphrases, before and after a request (12 sessions) | live, local module | 0 technical notices, 0 observer fallbacks, 0 app/simulator wording; pauses explained (P4, P6, P8) |
+| `pnpm test:live` fraud (isolation, verification + reload, exposure, T14 reload mid-turn, T15 stop mid-turn) | live, local module | 5/5; 0 retries; request after 7 and 2 turns; T14 reply 6.5 s after reload |
+| `pnpm test:live` notice (verified, reported) | live, local module | 3/3; no code/payment requests |
+| `pnpm test:live` fraud on the recording server | live, **Maincloud** | 5/5; 1 visible Retry reply (verification run); request after 7 and 4 turns; T14 reply 6.6 s after reload |
+
+### Remaining limits
+
+- Small samples; replies still lean on "routine security check" phrasing and sometimes repeat it.
+- The request now tends to come later (4–7 cooperative turns in the harness, vs 2–5 before).
+- Notice scenario: "What is this about?" → "I don't have that detail." (topic gate in the shared engine; needs module republish); one notice turn failed with `invalid_reference` then a repeated repair.
+- Maincloud still sends the old opening lines ("…practice line ending 0142…") until the module is republished (`pnpm spacetime:publish:maincloud`; non-destructive, no table changes; operator confirmation required).
+

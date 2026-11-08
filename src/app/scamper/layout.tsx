@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { ScamperShell } from "@/features/scamper/shell";
 
 export const metadata: Metadata = {
-  title: "SCAMPER: practice spotting customer scams",
+  title: "Cyber Sleuth: practice spotting customer scams",
   description: "A consent-based messaging simulation for practicing how to assess suspicious requests.",
 };
 

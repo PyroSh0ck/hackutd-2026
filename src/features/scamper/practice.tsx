@@ -7,7 +7,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type 
 import type { ClientEventType, Message, ObserverSessionView } from "@/contracts/observer";
 import type { AccountResponse } from "@/contracts/history";
 import type { ReferenceDirectoryResponse } from "@/contracts/reference";
-import { errorMessage } from "@/lib/api-client";
+import { ApiClientError, errorMessage } from "@/lib/api-client";
 import { newer, scamperApi, sessionIndex, type EventExtra } from "./adapter";
 import { OUTCOME, time } from "./labels";
 import { Mascot } from "./mascot";
@@ -35,6 +35,14 @@ function useDirectory() {
   }, []);
   return directory;
 }
+
+/** A submission not yet confirmed by the server (rendered after the server transcript, never persisted). */
+type Outgoing = { key: string; text: string; status: "sending" | "failed"; error?: string; userCount: number };
+
+const POLL_MS = 1_200;
+const KICK_MS = 20_000;
+/** Longer than the server's bounded turn (observer + planner + actor timeouts and one repair each). */
+const TURN_WAIT_MS = 200_000;
 
 type Phase = { kind: "loading" } | { kind: "ready"; last?: ObserverSessionView } | { kind: "session" };
 
@@ -115,11 +123,11 @@ export function PracticeWorkspace() {
 function PracticeIntro({ onBegin, starting, error, last }: { onBegin: () => void; starting: boolean; error?: string; last?: ObserverSessionView }) {
   return (
     <div className={s.intro}>
-      <Mascot size={148} description="SCAMPER's detective guide, a raccoon in a detective hat holding a magnifying glass" />
+      <Mascot size={148} description="Cyber Sleuth's detective guide, a raccoon in a detective hat holding a magnifying glass" />
       <Badge>Simulation</Badge>
       <h1 className={s.title}>Practice a real-world conversation.</h1>
-      {/* Only one (suspicious) scenario exists today, so the copy must not claim legitimate ones are mixed in. */}
-      <p className={s.lede}>Practice handling a simulated suspicious message.</p>
+      {/* Neutral on purpose: depending on PRACTICE_SCENARIOS the message may be fraudulent or genuine. */}
+      <p className={s.lede}>Practice handling an unexpected account message. Decide whom to trust.</p>
       <p className={s.lede}>Use only the fictional details provided. You can end practice at any time.</p>
       {error && <InlineError message={error} onRetry={onBegin} />}
       <div className={s.row}>
@@ -145,6 +153,8 @@ function ActivePractice({ initial, onRestart, restarting, restartError }: { init
   const [sending, setSending] = useState(false);
   const [acting, setActing] = useState(false);
   const [sendError, setSendError] = useState<string>();
+  const [outgoing, setOutgoing] = useState<Outgoing | null>(null);
+  const [stalled, setStalled] = useState(false);
   const [actionError, setActionError] = useState<string>();
   const [challengeId, setChallengeId] = useState<string>();
   const [verifyOpen, setVerifyOpen] = useState(initial.stage === "verifying" || initial.stage === "awaiting_final_decision");
@@ -156,27 +166,59 @@ function ActivePractice({ initial, onRestart, restarting, restartError }: { init
 
   const active = view.stage === "active" && !view.ended && !view.stopConfirmationPending;
   const paused = view.stage === "verifying" || view.stage === "awaiting_final_decision";
+  // Server-derived: the latest input still has observer/planner/actor work (also after a reload).
+  const generating = view.turnStatus.state === "generating" && !view.ended;
 
-  async function send() {
-    const text = draft.trim();
-    if (!text || sendLock.current || !active) return;
+  /**
+   * The bubble appears at once and the composer clears; the request only records the message (`after_save`)
+   * and the reply follows through `turnStatus`. One idempotency key per submission, reused by "Send again".
+   * An unknown outcome (network/5xx) is reconciled against the server before the bubble is marked unsent.
+   */
+  async function send(resend?: Outgoing) {
+    const text = resend?.text ?? draft.trim();
+    if (!text || sendLock.current || !active || generating || (outgoing && !resend)) return;
     sendLock.current = true;
+    const userCount = view.messages.filter((m) => m.role === "user").length;
+    const out: Outgoing = resend ? { ...resend, status: "sending", error: undefined } : { key: crypto.randomUUID(), text, status: "sending", userCount };
+    setOutgoing(out);
     setSending(true);
     setSendError(undefined);
+    setStalled(false);
+    if (!resend) setDraft("");
     try {
-      const r = await scamperApi.send(id, text);
+      const r = await scamperApi.send(id, text, out.key);
       setView(r.session);
-      setDraft("");
+      setOutgoing(null);
     } catch (e) {
-      setSendError(errorMessage(e, "Your message was not sent. Your draft is kept; try again."));
+      const status = e instanceof ApiClientError ? e.status : undefined;
+      if (status === undefined || status >= 500) {
+        try {
+          const { session } = await scamperApi.load(id);
+          const users = session.messages.filter((m) => m.role === "user");
+          if (users.length > out.userCount && users.at(-1)?.content === text) {
+            setView(session);
+            setOutgoing(null);
+            return;
+          }
+        } catch {
+          /* still unknown: keep the bubble, marked unsent, with the same key for a safe resend */
+        }
+      }
+      setOutgoing({ ...out, status: "failed", error: errorMessage(e, "Your message was not sent.") });
     } finally {
       sendLock.current = false;
       setSending(false);
     }
   }
 
+  const editFailed = () => {
+    if (!outgoing || outgoing.status !== "failed") return;
+    setDraft(outgoing.text);
+    setOutgoing(null);
+  };
+
   async function act(type: ClientEventType, extra: EventExtra = {}, opts: { allowWhileSending?: boolean } = {}) {
-    if (actLock.current || (sending && !opts.allowWhileSending)) return;
+    if (actLock.current || ((sending || generating) && !opts.allowWhileSending)) return;
     actLock.current = true;
     setActing(true);
     setActionError(undefined);
@@ -197,6 +239,7 @@ function ActivePractice({ initial, onRestart, restarting, restartError }: { init
     sendLock.current = true;
     setSending(true);
     setSendError(undefined);
+    setStalled(false);
     try {
       setView((await scamperApi.retry(id)).session);
     } catch (e) {
@@ -207,7 +250,46 @@ function ActivePractice({ initial, onRestart, restarting, restartError }: { init
     }
   }
 
-  const busy = sending || acting;
+  // Follow the reply while the server reports work for the latest input. Polls the read-only session; every
+  // KICK_MS it also asks the server to resume work (a no-op while a live worker holds the session, a takeover
+  // once an abandoned worker's lease has lapsed). Bounded: after TURN_WAIT_MS without progress it stops and
+  // says so, leaving the choice (check again / end) to the player.
+  const revision = view.revision;
+  useEffect(() => {
+    if (!generating || stalled) return;
+    let alive = true;
+    const started = Date.now();
+    let kicked = started;
+    const timer = window.setInterval(async () => {
+      if (Date.now() - started > TURN_WAIT_MS) {
+        window.clearInterval(timer);
+        if (alive) setStalled(true);
+        return;
+      }
+      if (Date.now() - kicked > KICK_MS) {
+        kicked = Date.now();
+        void scamperApi.process(id).catch(() => undefined);
+      }
+      try {
+        const { session } = await scamperApi.load(id);
+        if (alive) setView(session);
+      } catch {
+        /* transient: the next tick tries again */
+      }
+    }, POLL_MS);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+    // `revision` restarts the stall clock whenever the session makes progress.
+  }, [generating, stalled, id, revision]);
+
+  const checkAgain = () => {
+    setStalled(false);
+    void scamperApi.process(id).catch(() => undefined);
+  };
+
+  const busy = sending || acting || generating;
   // End practice stays usable while a reply is generating: the server cancels the in-flight work.
   const endPractice = () => void act("conversation_ended", {}, { allowWhileSending: true });
   const report = () => void act("conversation_reported");
@@ -243,7 +325,7 @@ function ActivePractice({ initial, onRestart, restarting, restartError }: { init
           </div>
         )}
 
-        <MessageList view={view} pending={sending}>
+        <MessageList view={view} typing={generating} outgoing={outgoing} onResend={active ? () => outgoing && void send(outgoing) : undefined} onEdit={editFailed}>
           <SimulatedRequestCard view={view} busy={busy} onReject={(requestId) => void act("request_rejected", { requestId })} onShare={(requestId, practiceCode) => void act("practice_code_submitted", { requestId, practiceCode })} />
         </MessageList>
 
@@ -262,13 +344,23 @@ function ActivePractice({ initial, onRestart, restarting, restartError }: { init
           </div>
         )}
 
+        {view.turnStatus.state === "paused" && view.turnStatus.message && !view.ended && (
+          <p className={s.statusNote} role="status">
+            {view.turnStatus.message}
+          </p>
+        )}
+        {stalled && generating && <InlineError message="No reply yet. It may still be on its way." onRetry={checkAgain} retryLabel="Check again" />}
+        <div className={s.srOnly} aria-live="polite">
+          {outgoing?.status === "sending" ? "Sending your message." : outgoing?.status === "failed" ? "Your message was not sent." : generating ? `Waiting for a reply from ${view.scenario.senderName}.` : ""}
+        </div>
+
         {view.technicalNotice && !view.ended && (
           <InlineError message={view.technicalNotice.message} onRetry={view.technicalNotice.canRetry ? () => void retry() : undefined} retryLabel="Retry reply" />
         )}
         {actionError && <InlineError message={actionError} onDismiss={() => setActionError(undefined)} />}
-        {sendError && <InlineError message={sendError} onRetry={() => void send()} retryLabel="Send again" onDismiss={() => setSendError(undefined)} />}
+        {sendError && <InlineError message={sendError} onDismiss={() => setSendError(undefined)} />}
 
-        <MessageComposer value={draft} onChange={setDraft} onSend={() => void send()} disabled={!active} sending={sending} />
+        <MessageComposer value={draft} onChange={setDraft} onSend={() => void send()} disabled={!active} sending={sending} blocked={generating || outgoing !== null} />
       </section>
 
       <div className={s.details} data-inline>
@@ -428,11 +520,44 @@ function TypingIndicator({ sender }: { sender: string }) {
   );
 }
 
+/** The player's just-submitted message: shown at once, then replaced by the server's copy (same position). */
+function OutgoingBubble({ outgoing, onResend, onEdit }: { outgoing: Outgoing; onResend?: () => void; onEdit: () => void }) {
+  const failed = outgoing.status === "failed";
+  return (
+    <li className={s.message} data-role="user" data-state={outgoing.status} aria-busy={!failed}>
+      <span className={s.avatar} data-self aria-hidden>
+        <User size={18} />
+      </span>
+      <div className={s.bubble}>
+        <div className={s.bubbleMeta}>
+          <strong>You</strong>
+          <span aria-hidden>·</span>
+          <span>{failed ? "Not sent" : "Sending…"}</span>
+        </div>
+        <p className={s.bubbleText}>{outgoing.text}</p>
+        {failed && (
+          <div className={s.bubbleActions}>
+            <span className={s.small}>{outgoing.error}</span>
+            {onResend && (
+              <button type="button" className={s.button} data-variant="secondary" onClick={onResend}>
+                Send again
+              </button>
+            )}
+            <button type="button" className={s.button} data-variant="ghost" onClick={onEdit}>
+              Edit
+            </button>
+          </div>
+        )}
+      </div>
+    </li>
+  );
+}
+
 /** Transcript plus trailing inline content (the request card), so cards scroll with the conversation. */
-function MessageList({ view, pending, children }: { view: ObserverSessionView; pending: boolean; children?: ReactNode }) {
+function MessageList({ view, typing, outgoing, onResend, onEdit, children }: { view: ObserverSessionView; typing: boolean; outgoing: Outgoing | null; onResend?: () => void; onEdit: () => void; children?: ReactNode }) {
   const scroller = useRef<HTMLOListElement>(null);
-  const count = view.messages.length + (pending ? 1 : 0) + (view.requestStatus === "not_presented" ? 0 : 1);
-  const lastRole = view.messages.at(-1)?.role;
+  const count = view.messages.length + (outgoing ? 1 : 0) + (typing ? 1 : 0) + (view.requestStatus === "not_presented" ? 0 : 1);
+  const lastRole = outgoing ? "user" : view.messages.at(-1)?.role;
   const [atBottom, setAtBottom] = useState(true);
   const [seen, setSeen] = useState(count);
   // Follow new messages only when the reader is already at the bottom (or just sent one); otherwise offer a jump.
@@ -474,7 +599,8 @@ function MessageList({ view, pending, children }: { view: ObserverSessionView; p
         {view.messages.map((m) => (
           <MessageBubble key={m.id} message={m} sender={view.scenario.senderName} />
         ))}
-        {pending && <TypingIndicator sender={view.scenario.senderName} />}
+        {outgoing && <OutgoingBubble key={outgoing.key} outgoing={outgoing} onResend={onResend} onEdit={onEdit} />}
+        {typing && <TypingIndicator sender={view.scenario.senderName} />}
         {children}
       </ol>
       {unseen && (
@@ -489,7 +615,7 @@ function MessageList({ view, pending, children }: { view: ObserverSessionView; p
   );
 }
 
-function MessageComposer({ value, onChange, onSend, disabled, sending }: { value: string; onChange: (v: string) => void; onSend: () => void; disabled: boolean; sending: boolean }) {
+function MessageComposer({ value, onChange, onSend, disabled, sending, blocked }: { value: string; onChange: (v: string) => void; onSend: () => void; disabled: boolean; sending: boolean; blocked: boolean }) {
   const inputId = useId();
   const hintId = useId();
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -518,12 +644,11 @@ function MessageComposer({ value, onChange, onSend, disabled, sending }: { value
           placeholder={disabled ? "Messaging is paused" : "Type your reply…"}
           aria-describedby={hintId}
           disabled={disabled}
-          readOnly={sending}
           maxLength={2000}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={onKeyDown}
         />
-        <button type="submit" className={s.button} disabled={disabled || sending || !value.trim()} aria-busy={sending}>
+        <button type="submit" className={s.button} disabled={disabled || sending || blocked || !value.trim()} aria-busy={sending}>
           <SendHorizontal size={18} aria-hidden />
           {sending ? "Sending…" : "Send"}
         </button>

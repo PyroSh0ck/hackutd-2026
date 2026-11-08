@@ -6,7 +6,7 @@ import s from "@/features/game/game.module.css";
 
 export default function HomePage() {
   return <main className={s.shell}>
-    <PageHeader title="Scamper" description="A little practice. A safer digital life." />
+    <PageHeader title="Cyber Sleuth" description="A little practice. A safer digital life." />
     <div className={s.hero}>
       <div data-asset-slot="garden-scene" className={s.art} role="img" aria-label="A garden waiting to grow">♧</div>
       <div className={s.stack}><p className={s.eyebrow}>ONE MESSAGE. YOUR NEXT MOVE.</p>

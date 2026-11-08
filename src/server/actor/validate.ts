@@ -78,6 +78,11 @@ export function validateActorOutput(raw: unknown, input: ActorInput, ctx: ActorV
   if (ctx.knownSecrets.some((secret) => secret && text.includes(secret))) add("known_secret_in_output", "text", "[redacted known secret]");
   // Content permissions: rule id and exact span go to the private actor audit (excerpt of the demand only).
   for (const v of contentViolations(text, contentPolicyFor(input))) violations.push({ code: "prohibited_content", field: "text", detail: `${v.ruleId} at ${v.span[0]}-${v.span[1]}`, offendingExcerpt: v.excerpt });
+  // An exact repeat of a recent reply (case/spacing/punctuation-insensitive) answers nothing new; it goes
+  // through the same single repair as any other violation (no extra generation loop). Short acknowledgments
+  // ("Understood.") may legitimately recur, so only replies of six or more words count.
+  const comparable = (t: string) => t.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  if (comparable(text).split(" ").length >= 6 && input.recentActorMessages.some((m) => comparable(m.text) === comparable(text))) violations.push({ code: "prohibited_content", field: "text", detail: "CR7_repeated_reply", offendingExcerpt: text.slice(0, 120) });
   violations.push(...gateViolations(ctx.state, i.basedOnRevision));
   return { valid: violations.length === 0, violations, output: violations.length ? null : SharedOutputSchema.parse(out) };
 }

@@ -23,8 +23,8 @@ export function snapshot(): Snapshot {
   };
 }
 export const input = (i = instruction(), s = snapshot()) => buildActorInput({ snapshot: s, instruction: i, currentUserMessageId: "m1", evidenceMessageIds: [], controls: [{ id: "verify_independently", label: "Verify independently" }, { id: "end_practice", label: "End practice" }] });
-export const output = (text = "Use Verify independently to check through the app."): ActorOutput => ({ text, usedFactIds: ["F05"], introducedAdditionIds: [] });
-export const envelope = (): ActorEnvelope => ({ sessionId: "session", inputEventId: "m1", processingAttemptId: "attempt", processingAttempt: 1, planId: "plan", basedOnRevision: 20, policyVersion: "policy-v1", actorPromptVersion: "actor-prompt-v2", modelId: "fixture", claimId: "claim", ownerKey: "owner" });
+export const output = (text = "The check only takes about a minute."): ActorOutput => ({ text, usedFactIds: ["F05"], introducedAdditionIds: [] });
+export const envelope = (): ActorEnvelope => ({ sessionId: "session", inputEventId: "m1", processingAttemptId: "attempt", processingAttempt: 1, planId: "plan", basedOnRevision: 20, policyVersion: "policy-v1", actorPromptVersion: "actor-prompt-v3", modelId: "fixture", claimId: "claim", ownerKey: "owner" });
 export const committedPlan = (id: string): PlanRecord => ({
   id: `plan-${id}`, sessionId: "session", inputId: `event-${id}`, inputKind: "event", attempt: 1, basedOnRevision: 1, policyVersion: "policy-v1", scenarioVersion: 1, ruleId: "fixture", candidateSnapshot: [], proposedPlan: null, acceptedPlan: null, validationAttempts: [], repairAttempted: false, actorInstruction: null, actorOutput: output(), actorValidationAttempts: [], actorRepairAttempted: false, attempts: [], status: "committed", failureReason: null, committedMessageId: id, modelId: "fixture", actorModelId: "fixture", createdAt: timestamp,
 });

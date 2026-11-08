@@ -95,7 +95,7 @@ export function GameExperience({ adapter: supplied }: { adapter?: GameAdapter })
   const mode = adapter?.source === "fixtures" ? "Public fixture preview · no live calls" : view?.opponent.mode === "scripted" ? "Scripted encounter" : origins.has("scripted_fallback") ? (origins.has("live_model") ? "Mixed · live + scripted fallback" : "Scripted fallback · live unavailable") : origins.has("live_model") ? "Live opponent" : "Live requested · awaiting first turn";
 
   return <main className={s.shell}>
-    <PageHeader title="Scamper" description="The urgent security alert" actions={<div className={s.row}><Link href="/">Home</Link>{view && <Button text="Restart" variant="ghost" disabled={busy} onClick={() => void restart()} />}</div>} />
+    <PageHeader title="Cyber Sleuth" description="The urgent security alert" actions={<div className={s.row}><Link href="/">Home</Link>{view && <Button text="Restart" variant="ghost" disabled={busy} onClick={() => void restart()} />}</div>} />
     <div className={s.row}><Badge text={mode} tone="info" />{view?.lineage.parentSessionId && <Badge text="Checkpoint practice · separate attempt" tone="warning" />}</div>
     {adapter?.source === "fixtures" && <p className={s.notice}>Authored snapshot walkthrough. Actions open prepared public views; your message is not sent to a model. Preview path: reply → inspect → approve, or verify → reject. Verification and rejection may advance over intermediate steps. Full rules, safe exit, reflection, and other replays require the API.</p>}
     <div aria-live="polite">{busy && <p role="status">{view ? "Waiting for the encounter…" : "Preparing your garden fund…"}</p>}</div>

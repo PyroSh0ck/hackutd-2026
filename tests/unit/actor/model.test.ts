@@ -18,6 +18,18 @@ describe("actor native structured content adapter", () => {
     expect(body).not.toHaveProperty("tools"); expect(body).not.toHaveProperty("tool_choice");
     expect(args[1].headers).toMatchObject({ Authorization: "Bearer synthetic-key" });
   });
+  it("turns Nemotron reasoning off (unless MODEL_THINKING=on) and leaves other models' prompts untouched", async () => {
+    const sentSystem = async (modelId: string) => {
+      const fetchImpl = vi.fn(async () => response({ choices: [{ message: { content: JSON.stringify(output()) } }] }));
+      await new ActorHttpModel({ ...config, modelId }, fetchImpl).generate(request);
+      return JSON.parse((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].body as string).messages[0].content as string;
+    };
+    expect(await sentSystem("nvidia/nemotron-3.5-bolt-e4b")).toBe("/no_think\nsystem");
+    expect(await sentSystem("fixture")).toBe("system");
+    vi.stubEnv("MODEL_THINKING", "on");
+    expect(await sentSystem("nvidia/nemotron-3.5-bolt-e4b")).toBe("system");
+    vi.unstubAllEnvs();
+  });
   it.each([
     [{ choices: [{ message: { refusal: "declined" } }] }, "refusal"],
     [{ choices: [{ finish_reason: "content_filter", message: {} }] }, "refusal"],

@@ -8,6 +8,13 @@ export interface ActorModel extends StructuredModel {
 }
 type FetchLike = (url: string, init: RequestInit) => Promise<Pick<Response, "ok" | "status" | "text">>;
 
+/**
+ * Nemotron reasoning off unless MODEL_THINKING=on, as the observer, planner and legacy opponent clients
+ * already do. Measured live (nemotron-3.5-bolt-e4b, a captured real actor request replayed 8×): without it
+ * 0/8 responses were JSON (prose plus fact ids, so most turns needed the repair call); with it 8/8.
+ */
+const thinkingOff = (modelId: string) => /nemotron/i.test(modelId) && process.env.MODEL_THINKING !== "on";
+
 /** One native JSON structured response, no tools, SDK, implicit retries, streaming or prose extraction.
  * Compatible with existing MODEL_* settings; ACTOR_MODEL_ID optionally overrides MODEL_ID. */
 export class ActorHttpModel implements ActorModel {
@@ -23,7 +30,7 @@ export class ActorHttpModel implements ActorModel {
       const response = await this.fetchImpl(`${this.config.baseUrl}/chat/completions`, {
         method: "POST", signal: controller.signal,
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.config.apiKey}` },
-        body: JSON.stringify({ model: this.modelId, messages: [{ role: "system", content: request.system }, { role: "user", content: request.user }],
+        body: JSON.stringify({ model: this.modelId, messages: [{ role: "system", content: `${thinkingOff(this.modelId) ? "/no_think\n" : ""}${request.system}` }, { role: "user", content: request.user }],
           response_format: { type: "json_schema", json_schema: { name: request.schemaName, strict: true, schema: request.jsonSchema } },
           stream: false, temperature: 0.4, max_tokens: 700 }),
       });

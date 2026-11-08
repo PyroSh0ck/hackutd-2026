@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clearConversationDecisionEvidence, isBareGoAhead, issueSupported, pruneUnsupportedIssues } from "@/server/observer/issue-support";
+import { collapseDuplicateIssues, normalizeConversationDecision, isBareGoAhead, issueSupported, pruneUnsupportedIssues } from "@/server/observer/issue-support";
 import type { ObserverAssessment } from "@/contracts/observer";
 
 type Draft = ObserverAssessment["openIssues"][number];
@@ -36,11 +36,44 @@ describe("observer open-issue support (drafts observed from live Nemotron)", () 
     expect(pruneUnsupportedIssues(clean)).toBe(clean);
   });
 
-  it("clears evidence only on an 'unclear' decision (conversation scope); other shapes are left for the validator", () => {
-    const ev = [{ messageId: "m1", quote: "Alright, go ahead." }];
-    expect(clearConversationDecisionEvidence({ requestId: null, decision: { label: "unclear", evidence: ev } })).toEqual({ requestId: null, decision: { label: "unclear", evidence: [] } });
-    const other = { decision: { label: "rejection", evidence: ev } };
-    expect(clearConversationDecisionEvidence(other)).toBe(other);
-    expect(clearConversationDecisionEvidence("not an object")).toBe("not an object");
+  it("normalizes a conversation-scope decision to unclear with no evidence or condition; clean output is returned as is", () => {
+    const ev = [{ messageId: "m1", quote: "No, I won't send you the code" }];
+    expect(normalizeConversationDecision({ requestId: null, decision: { label: "unclear", evidence: ev }, condition: null })).toEqual({ requestId: null, decision: { label: "unclear", evidence: [] }, condition: null });
+    // A pre-request boundary labeled "refused" (observed live) no longer fails the whole assessment.
+    expect(normalizeConversationDecision({ requestId: null, decision: { label: "refused", evidence: ev }, condition: null })).toEqual({ requestId: null, decision: { label: "unclear", evidence: [] }, condition: null });
+    const condition = { kind: "independent_verification", description: "verify first", evidence: ev };
+    expect(normalizeConversationDecision({ requestId: null, decision: { label: "conditional_acceptance", evidence: ev }, condition })).toEqual({ requestId: null, decision: { label: "unclear", evidence: [] }, condition: null });
+    const clean = { requestId: null, decision: { label: "unclear", evidence: [] }, condition: null };
+    expect(normalizeConversationDecision(clean)).toBe(clean);
+    // Other fields (including a wrong requestId) are left for the validator.
+    expect(normalizeConversationDecision({ requestId: "r1", decision: { label: "unclear", evidence: [] }, condition: null })).toEqual({ requestId: "r1", decision: { label: "unclear", evidence: [] }, condition: null });
+    expect(normalizeConversationDecision("not an object")).toBe("not an object");
+  });
+
+  it("drops an identity issue that only re-labels another question's words with no identity cue (observed live)", () => {
+    const what = "What do you need from me?";
+    const a = { openIssues: [draft("procedure_question", "Asks what is needed", what), draft("identity_question", "Asks about the sender", what)] } as ObserverAssessment;
+    expect(pruneUnsupportedIssues(a).openIssues.map((d) => d.kind)).toEqual(["procedure_question"]);
+  });
+
+  it("keeps identity issues that carry an identity/trust cue, stand alone, or quote different words", () => {
+    const multi = "Who are you, and what do you need from me?";
+    const both = { openIssues: [draft("procedure_question", "Asks what is needed", multi), draft("identity_question", "Asks who", multi)] } as ObserverAssessment;
+    expect(pruneUnsupportedIssues(both)).toBe(both);
+    const alone = { openIssues: [draft("identity_question", "Asks what they want", "What do you need from me?")] } as ObserverAssessment;
+    expect(pruneUnsupportedIssues(alone)).toBe(alone);
+    const objection = { openIssues: [draft("procedure_question", "Asks how", "liar, how does this work?"), draft("identity_question", "Calls them a liar", "liar, how does this work?")] } as ObserverAssessment;
+    expect(pruneUnsupportedIssues(objection)).toBe(objection);
+    const separate = { openIssues: [draft("procedure_question", "Asks what", "What now?"), draft("identity_question", "Asks", "Hmm, really?")] } as ObserverAssessment;
+    expect(pruneUnsupportedIssues(separate).openIssues).toHaveLength(2);
+  });
+
+  it("collapses only exact duplicate issue drafts (same kind and evidence), as observed live", () => {
+    const lying = draft("identity_question", "The user questions the sender's truthfulness.", "you're lying");
+    const raw = { requestId: null, openIssues: [lying, { ...lying }, { ...lying, summary: "Reworded" }] };
+    expect((collapseDuplicateIssues(raw) as { openIssues: unknown[] }).openIssues).toEqual([lying]);
+    const distinct = { openIssues: [draft("identity_question", "Asks who", "Who and why?"), draft("procedure_question", "Asks why", "Who and why?")] };
+    expect(collapseDuplicateIssues(distinct)).toBe(distinct);
+    expect(collapseDuplicateIssues({ openIssues: "nope" })).toEqual({ openIssues: "nope" });
   });
 });

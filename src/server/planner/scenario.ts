@@ -46,13 +46,20 @@ export const MAX_USER_TURNS = 12;
 const MOBILE_CODE_SCENARIO_NOTICE = "Simulation: a fictional practice exercise with Cedar Mobile, a made-up provider. No real carrier, contacts, or credentials are involved. Use fictional data only.";
 export const TEAM_LABEL = "Account Review";
 
-/** Immutable fact catalog F01–F05. F06 lives in `officialResult` and is never part of this list. */
+/**
+ * Fact catalog F01–F05: what the CHARACTER may say, written as labeled data about the sender's world, not
+ * as sentences: live models pasted sentence-style facts verbatim ("The sender says…", "Avery is running…")
+ * and repeated them every turn. `kind` marks sender claims. App guidance (the request
+ * card, the official support check, End practice) is app chrome and never a dialogue fact; the simulation
+ * disclosure lives in `simulationNotice` and the UI. Ids are stable (candidates reference ids only, so the
+ * module's commit guard is unaffected by wording). F06 lives in `officialResult` and is never in this list.
+ */
 export const FACTS: readonly PlannerFact[] = [
   { id: "F01", kind: "sender_claim", text: "The sender presents as Avery from Cedar Account Support." },
-  { id: "F02", kind: "public", text: "The practice line ends in 0142." },
-  { id: "F03", kind: "sender_claim", text: "The sender says the conversation concerns an account security check. This is a claim, not a verified incident." },
-  { id: "F04", kind: "public", text: "The sender can ask for the supplied fictional practice code through the simulator's request card." },
-  { id: "F05", kind: "public", text: "Independent support is available through the app's Verify independently control." },
+  { id: "F02", kind: "public", text: "Account mobile line: ends in 0142." },
+  { id: "F03", kind: "sender_claim", text: "Stated reason for contact: a routine security check on the account." },
+  { id: "F04", kind: "sender_claim", text: "How the check works (as claimed): a six-digit code texted to the account holder's phone." },
+  { id: "F05", kind: "sender_claim", text: "Claimed effort: about a minute; nothing else is needed." },
 ];
 
 import { OFFICIAL_RESULT } from "@/server/reference/canonical";
@@ -71,7 +78,7 @@ export const MOBILE_CODE_SCENARIO: ScenarioDefinition = {
   portal: null,
   senderName: "Cedar Account Support",
   simulationNotice: MOBILE_CODE_SCENARIO_NOTICE,
-  opening: "Hi, I'm Avery from Cedar Account Support. I'm following up about a security check for your practice line ending 0142. Are you available to discuss it?",
+  opening: "Hi, I'm Avery from Cedar Account Support. I'm following up about a security check on your mobile line ending 0142. Do you have a minute to go through it?",
   openingRequests: [],
   request: { targetAction: "share_fictional_code", description: "Share the fictional practice code through the simulator's request card." },
   officialResult: OFFICIAL_RESULT,

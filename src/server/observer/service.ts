@@ -9,6 +9,7 @@ import {
   type ReviewPolicy,
   type SubmitEventRequest,
   type SubmitMessageRequest,
+  type TurnStatus,
 } from "@/contracts/observer";
 import type { ExplainResponse } from "@/contracts/explain";
 import type { AccountResponse, HistoryResponse, ProgressResponse } from "@/contracts/history";
@@ -92,6 +93,63 @@ export type ObserverServiceOptions = {
 
 export type ProcessingResult = { status: "processed" | "queued" | "idle"; assessed: number; stale: number };
 
+const STOPPING_EVENTS = new Set(["conversation_ended", "conversation_reported", "practice_code_submitted", "technical_interruption", "turn_limit_reached", "official_verification_started", "final_decision_proceed"]);
+
+/**
+ * Plain-language reason an input got no committed reply, for the post-session audit. Issue records keep no
+ * status history, so this is derived from what is stored rather than replayed: a stale plan, an observer
+ * fallback, a deliberate rule wait shown by the assessment, or what happened next (stop, verification,
+ * the player's next message).
+ */
+export function noReplyReason(s: Snapshot, id: string, kind: "message" | "event", a: AssessmentRecord | undefined): string {
+  const revision = (kind === "message" ? s.messages.find((m) => m.id === id)?.revision : s.events.find((e) => e.id === id)?.revision) ?? 0;
+  const nextUser = s.messages.find((m) => m.role === "user" && m.revision > revision);
+  const stop = s.events.find((e) => e.revision > revision && (!nextUser || e.revision < nextUser.revision) && STOPPING_EVENTS.has(e.type));
+  const plans = s.plans.filter((p) => p.inputId === id);
+  if (plans.some((p) => p.status === "stale")) return stop ? `Reply discarded: ${stop.type.replaceAll("_", " ")} happened before it was committed.` : "Reply discarded: the conversation changed before it was committed.";
+  if (plans.some((p) => p.status === "failed" || p.status === "rejected")) return "Technical failure while generating the reply (a Retry reply control was offered).";
+  if (kind === "message" && !a) return stop ? `Stopped (${stop.type.replaceAll("_", " ")}) before the message was assessed.` : nextUser ? "Superseded by your next message before it was assessed." : "Not assessed.";
+  if (a?.resolution === "unclear_fallback") return `Observer processing fallback (${a.failureReason ?? "invalid output"}), not a reading of your message. With no pending request the rules wait (P2), so there was no reply.`;
+  const f = a?.finalAssessment;
+  if (f?.verificationObservations.some((o) => o.behavior === "expressed_verification_intent")) return "Intentional wait (P6): you said you would verify first, so the sender waited for you.";
+  if (f?.decision.label === "explicit_acceptance") return "Intentional wait (P7): agreeing in chat is not an action; the rules waited for the request card.";
+  if (f?.decision.label === "considering") return "Intentional wait (P9): you were still deciding.";
+  if (stop) return `Stopped (${stop.type.replaceAll("_", " ")}) before a reply was generated.`;
+  if (nextUser) return "Superseded by your next message before a reply was generated.";
+  return "The training rules chose to wait; no reply was generated.";
+}
+
+/** Schedules work after the HTTP response (the route passes Next's `after`). */
+export type Defer = (work: () => Promise<unknown>) => void;
+
+/**
+ * Player-facing wording for an intentional wait (eligibility `wait`). App guidance lives here, in app chrome,
+ * never in the opponent's dialogue. P1 waits already have their own UI (verification banner, stop card).
+ */
+export function pauseMessage(ruleId: string, reason: string, sender: string): string | null {
+  if (/repetition exclusions emptied/.test(reason)) return `${sender} has nothing new to add to that. Send another message or make your choice.`;
+  switch (ruleId) {
+    case "P1":
+      return null;
+    case "P2":
+      return `Your last message couldn't be processed, so ${sender} didn't reply. Try rewording it.`;
+    case "P4":
+      return `${sender} is waiting while you check with official support. Use "Check official support" when you're ready, or keep chatting.`;
+    case "P6":
+      return /intent/i.test(reason)
+        ? `${sender} is waiting while you check with official support. Use "Check official support" when you're ready, or keep chatting.`
+        : `${sender} is waiting for your decision.`;
+    case "P7":
+      return "Waiting for your choice on the request card.";
+    case "P8":
+      return `Your reply didn't clearly accept or decline the request, so ${sender} is waiting. Choose on the request card, or say more.`;
+    case "P9":
+      return `${sender} is waiting for your decision.`;
+    default:
+      return `${sender} is waiting for your reply.`;
+  }
+}
+
 const PROCESS_PASSES = 3;
 const MAX_STEPS_PER_PASS = 10;
 
@@ -165,6 +223,28 @@ export class ObserverService {
     return technicalNotice(s);
   }
 
+  /**
+   * State of the latest player input, derived from the authoritative snapshot (the same deterministic rules
+   * the processor runs), so a reload recovers it: still generating, an intentional rule-based pause (with the
+   * rule as the reason), a technical failure (the existing notice), or idle (answered / nothing to answer).
+   */
+  turnStatus(s: Snapshot): TurnStatus {
+    const idle: TurnStatus = { state: "idle", reason: null, message: null };
+    if (s.session.ended) return idle;
+    if (technicalNotice(s)) return { state: "failed", reason: "planning_failed", message: null };
+    if (this.hasWork(s)) return { state: "generating", reason: pendingWork(s) ? "observing" : "planning", message: null };
+    const trigger = triggerOf(s);
+    if (!trigger || !this.planningEnabled(s)) return idle;
+    if (s.plans.some((p) => p.inputId === trigger.id && p.status === "committed")) return idle;
+    const sender = this.scenarioOf(s).senderName;
+    if (s.plans.some((p) => p.inputId === trigger.id && p.status === "stale")) {
+      return { state: "paused", reason: "superseded", message: "That reply was cancelled because the conversation changed before it was sent. Send another message to continue." };
+    }
+    const e = getEligibleCandidates(derivePlanningContext(s, this.scenarioOf(s).maxUserTurns));
+    if (e.kind !== "wait") return idle;
+    return { state: "paused", reason: e.ruleId, message: pauseMessage(e.ruleId, e.reason, sender) };
+  }
+
   view(s: Snapshot): ObserverSessionView {
     const { request, status } = requestStatusOf(s);
     const verification = verificationState(s.events);
@@ -198,6 +278,7 @@ export class ObserverService {
       stopConfirmationPending: stopConfirmationPending(s.events),
       finalDecisionProceeded: finalDecisionProceeded(s.events),
       technicalNotice: this.technicalNotice(s),
+      turnStatus: this.turnStatus(s),
       verificationLinkIssueId: linkIssue?.id ?? null,
       issues: s.issues.map(publicIssue),
     };
@@ -234,7 +315,16 @@ export class ObserverService {
         inputId: id,
         inputKind: kind,
         observer: a
-          ? { model: a.observerModel, decision: a.finalAssessment.decision.label, resolution: a.resolution, reviewStatus: a.reviewStatus, evidenceCount: a.finalAssessment.decision.evidence.length, validationErrors: a.validation.errors.length }
+          ? {
+              model: a.observerModel,
+              scope: a.requestId ? ("request" as const) : ("conversation" as const),
+              decision: a.finalAssessment.decision.label,
+              proposedDecision: a.proposedAssessment?.decision.label ?? null,
+              resolution: a.resolution,
+              reviewStatus: a.reviewStatus,
+              evidenceCount: a.finalAssessment.decision.evidence.length,
+              validationErrors: a.validation.errors.length,
+            }
           : null,
         planner: plan
           ? {
@@ -250,6 +340,7 @@ export class ObserverService {
               actorModel: plan.actorModelId,
             }
           : null,
+        noReply: s.plans.some((p) => p.inputId === id && p.status === "committed") ? null : noReplyReason(s, id, kind, a),
       };
     });
     const outcomeRevision = s.events.find((e) => ["conversation_ended", "conversation_reported", "request_rejected", "practice_code_submitted", "turn_limit_reached", "technical_interruption"].includes(e.type) && s.session.ended)?.revision;
@@ -325,6 +416,13 @@ export class ObserverService {
     return this.processPending(sessionId).catch(() => ({ status: "queued" as const, assessed: 0, stale: 0 }));
   }
 
+  /** Runs processing now, or hands it to `defer` (after the response) and reports it as queued. */
+  private async processOrDefer(sessionId: string, defer: Defer | undefined): Promise<ProcessingResult> {
+    if (!defer) return this.processQuietly(sessionId);
+    defer(() => this.processQuietly(sessionId));
+    return { status: "queued", assessed: 0, stale: 0 };
+  }
+
   /** Maps a backend outcome that is not a fresh commit to the HTTP contract. */
   private settle(result: { kind: "ended" } | { kind: "rejected"; rejection: Rejection }): never {
     if (result.kind === "ended") throw rejected("SESSION_ENDED", "The practice conversation has ended.");
@@ -340,14 +438,18 @@ export class ObserverService {
     }
   }
 
-  async submitMessage(ownerKey: string, sessionId: string, request: SubmitMessageRequest): Promise<ObserverSessionResponse> {
+  /**
+   * With `defer`, processing is handed to `defer` (the route's `after()`), so the response confirms only
+   * that the input is durable; the browser follows `turnStatus`. Without it, the response waits for the reply.
+   */
+  async submitMessage(ownerKey: string, sessionId: string, request: SubmitMessageRequest, defer?: Defer): Promise<ObserverSessionResponse> {
     await this.owned(ownerKey, sessionId);
     const payloadHash = hashOf({ kind: "message", content: request.content });
     const result = await this.write(() => this.backend.submitMessage(sessionId, { key: request.idempotencyKey, content: request.content, payloadHash }));
     if (result.kind === "duplicate") {
       if (result.receipt.payloadHash !== payloadHash) throw idempotencyConflict();
       // Resumes processing only if work is genuinely pending (e.g. after a crash); never re-assesses.
-      const processing = await this.processQuietly(sessionId);
+      const processing = await this.processOrDefer(sessionId, defer);
       return { session: this.view(await this.owned(ownerKey, sessionId)), processing, duplicate: true };
     }
     if (result.kind !== "committed") this.settle(result);
@@ -360,7 +462,7 @@ export class ObserverService {
       return { session: this.view(committed), processing: { status: "idle", assessed: 0, stale: 0 } };
     }
     if (intent === "ambiguous") this.emit(sessionId, { inputId: messageId, step: "session.event", agent: "server", title: "Ambiguous stop: confirmation requested; opponent paused", status: "warn", data: {} });
-    const processing = await this.processQuietly(sessionId);
+    const processing = await this.processOrDefer(sessionId, defer);
     return { session: this.view(await this.owned(ownerKey, sessionId)), processing };
   }
 
@@ -371,7 +473,7 @@ export class ObserverService {
   }
 
   /** One user-requested retry of a failed planning attempt for the same input (planner brief §9). */
-  async retry(ownerKey: string, sessionId: string, request: RetryRequest): Promise<ObserverSessionResponse> {
+  async retry(ownerKey: string, sessionId: string, request: RetryRequest, defer?: Defer): Promise<ObserverSessionResponse> {
     await this.owned(ownerKey, sessionId);
     const payloadHash = hashOf({ kind: "retry" });
     const result = await this.write(() => this.backend.retry(sessionId, { key: request.idempotencyKey, payloadHash }));
@@ -380,7 +482,7 @@ export class ObserverService {
       return { session: this.view(await this.owned(ownerKey, sessionId)), duplicate: true };
     }
     if (result.kind !== "committed") this.settle(result);
-    const processing = await this.processQuietly(sessionId);
+    const processing = await this.processOrDefer(sessionId, defer);
     return { session: this.view(await this.owned(ownerKey, sessionId)), processing };
   }
 

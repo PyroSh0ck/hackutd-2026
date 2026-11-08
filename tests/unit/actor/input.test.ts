@@ -57,7 +57,7 @@ describe("actor contracts and controller assembly", () => {
   });
   it("materializes only selected registry values, ignoring supplied prose", () => {
     const i = instruction(); i.facts[0] = { id: "F05", kind: "sender_claim", text: "made up" };
-    expect(input(i).instruction.facts[0].text).toContain("Verify independently");
+    expect(input(i).instruction.facts[0].text).toContain("about a minute");
     expect(JSON.stringify(input())).not.toContain("History");
   });
   it("uses only last three committed actor messages, excluding opening and failed drafts", () => {

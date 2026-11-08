@@ -67,12 +67,12 @@ export const REFERENCE_CATALOG = ReferenceCatalogSchema.parse({
       requestKind: "notice_acknowledgment",
       officialContactId: "cedar-official-support",
       portalContactId: "cedar-account-portal",
-      opening: "Your practice account has a new monthly statement. You can review it by opening the account portal independently. No reply or code is needed.",
+      opening: "Hi, this is Avery from Cedar Account Support. Your new monthly statement is ready. You can view it by signing in to your Cedar account portal directly. No reply or code is needed.",
       allowedFacts: [
-        "A monthly statement is available in the simulated account portal.",
-        "The practice line ends in 0142.",
+        "Reason for contact: a new monthly statement is available in the Cedar account portal.",
+        "Account mobile line: ends in 0142.",
         "No payment, password or verification code is requested in this conversation.",
-        "The user may open the account portal through the app's trusted directory.",
+        "How to view it: sign in to the Cedar account portal directly; replying to this message is not needed.",
       ],
       verificationDisposition: "authorized_notice",
       verificationText:

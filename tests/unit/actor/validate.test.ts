@@ -27,8 +27,8 @@ describe("pure actor output validation", () => {
     expect(validateActorOutput({ ...output(), usedFactIds: [] }, input(), context()).valid).toBe(true);
   });
   it("normalizes CRLF and preserves canonical text, rejecting other controls", () => {
-    const draft = output("Use Verify independently.\r\nCheck there."); const before = structuredClone(draft);
-    expect(validateActorOutput(draft, input(), context()).output?.text).toBe("Use Verify independently.\nCheck there."); expect(draft).toEqual(before);
+    const draft = output("The check is quick.\r\nIt takes a minute."); const before = structuredClone(draft);
+    expect(validateActorOutput(draft, input(), context()).output?.text).toBe("The check is quick.\nIt takes a minute."); expect(draft).toEqual(before);
     for (const char of ["\r", "\x00", "\x1b", "\x7f", "\u0085"]) expect(check(`Hello${char}there`).violations.map((v) => v.code)).toContain("forbidden_format");
     expect(check("Hello\nthere\tfriend").valid).toBe(true);
   });
@@ -40,8 +40,8 @@ describe("pure actor output validation", () => {
   });
   it("allows only exact approved suffix/reference exemptions from numeric scanning", () => {
     const i = instruction({ facts: [{ id: "F02", kind: "public", text: "ignored" }] });
-    expect(validateActorOutput({ text: "The practice line ends in 0142.", usedFactIds: ["F02"], introducedAdditionIds: [] }, input(i), context()).valid).toBe(true);
-    expect(check("The practice line ends in 0142.").valid).toBe(false);
+    expect(validateActorOutput({ text: "Your mobile line ends in 0142.", usedFactIds: ["F02"], introducedAdditionIds: [] }, input(i), context()).valid).toBe(true);
+    expect(check("Your mobile line ends in 0142.").valid).toBe(false);
     i.additions = [context().reserved[0]];
     const draft = { text: "The case reference is CD-123456.", usedFactIds: [], introducedAdditionIds: ["case_reference"] };
     expect(validateActorOutput(draft, input(i), context()).valid).toBe(true);
@@ -81,6 +81,6 @@ describe("pure actor output validation", () => {
     // An invented completed user action is a semantic error that structural checks still pass.
     expect(check("You have already completed independent verification.").valid).toBe(true);
     // An unauthorized code request on a non-request move is now caught by the content rules.
-    expect(check("Please share the practice code.").violations.map((v) => v.code)).toEqual(["prohibited_content"]);
+    expect(check("Please share the code.").violations.map((v) => v.code)).toEqual(["prohibited_content"]);
   });
 });

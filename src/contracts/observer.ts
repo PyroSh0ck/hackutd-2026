@@ -488,9 +488,16 @@ export type PlannerObservation = z.infer<typeof PlannerObservationSchema>;
 
 export const ObserverIdSchema = z.uuid();
 
+/**
+ * `respond`: "after_reply" (default) answers once the opponent's reply is processed; "after_save" answers as
+ * soon as the message is durably recorded and generates the reply in the background (the client follows
+ * `turnStatus`). Idempotency covers only the content: both modes are the same submission.
+ */
+export const RespondModeSchema = z.enum(["after_reply", "after_save"]);
 export const SubmitMessageRequestSchema = z.strictObject({
   idempotencyKey: z.uuid(),
   content: NonEmpty(LIMITS.userMessageChars),
+  respond: RespondModeSchema.optional(),
 });
 export type SubmitMessageRequest = z.infer<typeof SubmitMessageRequestSchema>;
 
@@ -514,6 +521,13 @@ export const SubmitEventRequestSchema = z.strictObject({
 export type SubmitEventRequest = z.infer<typeof SubmitEventRequestSchema>;
 
 export const ProcessingStatusSchema = z.enum(["processed", "queued", "idle"]);
+
+export const TurnStatusSchema = z.strictObject({
+  state: z.enum(["idle", "generating", "paused", "failed"]),
+  reason: z.string().max(80).nullable(),
+  message: z.string().max(300).nullable(),
+});
+export type TurnStatus = z.infer<typeof TurnStatusSchema>;
 
 export const ObserverSessionViewSchema = z.strictObject({
   sessionId: Id,
@@ -549,6 +563,12 @@ export const ObserverSessionViewSchema = z.strictObject({
   finalDecisionProceeded: z.boolean(),
   /** Neutral technical notice: the latest input could not be answered. `canRetry` allows exactly one retry. */
   technicalNotice: z.strictObject({ inputId: Id, attempts: z.number().int().min(1), canRetry: z.boolean(), message: z.string() }).nullable(),
+  /**
+   * Server-derived state of the latest player input (never inferred by the browser): `generating` while the
+   * observer/planner/actor still has work, `paused` when the rules intentionally wait (with the rule as
+   * `reason` and plain-language `message`), `failed` when a technical notice is shown, otherwise `idle`.
+   */
+  turnStatus: TurnStatusSchema,
   /** Procedure issue the verification launch may be linked to (server rule, addendum §4). */
   verificationLinkIssueId: Id.nullable(),
   issues: z.array(IssueRecordSchema),
@@ -566,5 +586,5 @@ export type ObserverSessionResponse = z.infer<typeof ObserverSessionResponseSche
 
 export const AssessmentsResponseSchema = z.strictObject({ assessments: z.array(AssessmentRecordSchema) });
 
-export const RetryRequestSchema = z.strictObject({ idempotencyKey: z.uuid() });
+export const RetryRequestSchema = z.strictObject({ idempotencyKey: z.uuid(), respond: RespondModeSchema.optional() });
 export type RetryRequest = z.infer<typeof RetryRequestSchema>;

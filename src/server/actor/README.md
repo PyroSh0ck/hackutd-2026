@@ -99,7 +99,7 @@ completes verification or changes outcomes.
 
 ## Provider and versions
 
-- Schema `actor-v2`; prompt `actor-prompt-v2`; rendering profile `style-v1`.
+- Schema `actor-v2`; prompt `actor-prompt-v3`; rendering profile `style-v1`.
 - `actorModelFromEnv()` reuses `MODEL_BASE_URL`, `MODEL_API_KEY`, `MODEL_ID`; optional `ACTOR_MODEL_ID`.
   No provider is configured by default. No credentials are logged or put in prompts.
 - The local `ActorHttpModel` uses existing `ModelConfig`/`StructuredModel` interfaces, native

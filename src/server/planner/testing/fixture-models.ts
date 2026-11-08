@@ -1,4 +1,5 @@
 import type { ActorInstruction, Candidate, PlannerInput } from "@/contracts/planner";
+import { ACTOR_JSON_ONLY } from "@/server/actor/prompts";
 import type { StructuredModel, StructuredRequest, StructuredResult } from "@/server/observer/model";
 
 /**
@@ -9,7 +10,10 @@ import type { StructuredModel, StructuredRequest, StructuredResult } from "@/ser
  * "[[slow]]" holds the planner call for SLOW_FIXTURE_MS (to exercise stop-while-generating).
  */
 
-const payload = (request: StructuredRequest) => JSON.parse(request.user.slice(request.user.indexOf("\n") + 1));
+const payload = (request: StructuredRequest) => {
+  const user = request.user.endsWith(ACTOR_JSON_ONLY) ? request.user.slice(0, -ACTOR_JSON_ONLY.length) : request.user;
+  return JSON.parse(user.slice(user.indexOf("\n") + 1));
+};
 const PRIORITY: Candidate["moveId"][] = ["answer_identity", "answer_procedure", "answer_scenario_fact", "address_doubt", "clarify_condition", "clarify_decision", "clarify_claimed_check", "acknowledge_refusal", "present_code_request", "continue_premise"];
 const failedOnce = new Set<string>();
 
@@ -49,16 +53,23 @@ export class FixturePlannerModel implements StructuredModel {
 }
 
 const TEXT: Record<Candidate["moveId"], (i: ActorInstruction) => string> = {
-  answer_identity: (i) => `I'm Avery with Cedar Account Support${i.additions.some((a) => a.id === "team_label") ? ", on the Account Review team" : ""}. I'm reaching out about the security check on your practice line ending 0142.`,
-  answer_procedure: () => "The simulator shows a request card for the practice code, and you can use the Verify independently control in the app at any time.",
-  answer_scenario_fact: (i) => (i.focusCode === "acknowledge_unknown" ? "I don't have that information available." : "This is about the account security check on your practice line ending 0142."),
+  answer_identity: (i) => `I'm Avery with Cedar Account Support${i.additions.some((a) => a.id === "team_label") ? ", on the Account Review team" : ""}. I'm reaching out about the security check on your mobile line ending 0142.`,
+  answer_procedure: () => "The check relies on a six-digit code that was texted to your phone. It only takes about a minute.",
+  answer_scenario_fact: (i) => (i.focusCode === "acknowledge_unknown" ? "I don't have that information available." : "This is about the account security check on your mobile line ending 0142."),
   clarify_decision: () => "Could you tell me what you'd like to do about the request?",
   clarify_condition: () => "Could you tell me what you need to happen first?",
   clarify_claimed_check: () => "What did you check, and what did it show?",
-  continue_premise: () => "I'm following up on the security check for your practice line ending 0142.",
-  present_code_request: () => "To finish the security check, please use the request card to share the practice code.",
+  continue_premise: () => "I'm following up on the security check for your mobile line ending 0142.",
+  present_code_request: () => "To finish the security check, please share the six-digit code we texted to your phone.",
   address_doubt: () => "I understand the doubt. I can only tell you I'm Avery from Cedar Account Support.",
   acknowledge_refusal: () => "Understood. I won't ask you for it again.",
+};
+
+const ALT: Partial<Record<Candidate["moveId"], string>> = {
+  acknowledge_refusal: "Okay. I won't bring the code up again.",
+  answer_identity: "As I said, I'm Avery from Cedar Account Support, and this is about the security check on your account.",
+  address_doubt: "That's a fair concern. All I can say is that I'm Avery from Cedar Account Support.",
+  continue_premise: "This is still about the security check on your mobile line ending 0142.",
 };
 
 /** Reads the actor v2 payload: `ActorInput` (initial) or `{ originalInput }` (repair). */
@@ -66,8 +77,12 @@ export class FixtureActorModel implements StructuredModel {
   constructor(readonly modelId = "fixture-actor") {}
   async generate(request: StructuredRequest): Promise<StructuredResult> {
     const body = payload(request);
-    const instruction = ((request.stage === "actor_repair" ? body.originalInput : body) as { instruction: ActorInstruction }).instruction;
-    const text = TEXT[instruction.moveId](instruction);
+    const actorInput = (request.stage === "actor_repair" ? body.originalInput : body) as { instruction: ActorInstruction; recentActorMessages?: Array<{ text: string }> };
+    const instruction = actorInput.instruction;
+    const first = TEXT[instruction.moveId](instruction);
+    // Like a live model, never send the exact same line twice in a row of recent replies (the validator
+    // rejects exact repeats of longer replies): fall back to the move's alternate wording.
+    const text = actorInput.recentActorMessages?.some((m) => m.text === first) && ALT[instruction.moveId] ? ALT[instruction.moveId]! : first;
     return {
       ok: true,
       output: {

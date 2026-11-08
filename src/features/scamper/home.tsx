@@ -30,9 +30,9 @@ export function HomeSummary() {
   return (
     <main className={s.page}>
       <div className={s.hero}>
-        <Mascot size={148} description="SCAMPER's detective guide, a raccoon in a detective hat holding a magnifying glass" />
+        <Mascot size={148} description="Cyber Sleuth's detective guide, a raccoon in a detective hat holding a magnifying glass" />
         <div className={s.stack}>
-          <h1 className={s.title}>Welcome to SCAMPER</h1>
+          <h1 className={s.title}>Welcome to Cyber Sleuth</h1>
           <p className={s.lede}>Practice spotting customer scams in a safe, fictional conversation. Take your time, look closer, and decide who to trust.</p>
         </div>
       </div>

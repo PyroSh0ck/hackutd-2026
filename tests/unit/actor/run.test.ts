@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ACTOR_JSON_ONLY } from "@/server/actor/prompts";
 import type { StructuredResult } from "@/server/observer/model";
 import { runActor } from "@/server/actor/run";
 import { ActorAttemptRecordSchema } from "@/server/actor/schemas";
@@ -21,7 +22,8 @@ describe("buffered actor call budget and failure routing", () => {
     const result = await runActor(options(), s.deps);
     expect(result).toMatchObject({ kind: "prepared", calls: 2 });
     expect(result.attempts.map((a) => a.status)).toEqual(["invalid", "valid"]);
-    const repair = JSON.parse(s.requests[1].user.slice(s.requests[1].user.indexOf("\n") + 1));
+    expect(s.requests[1].user.endsWith(ACTOR_JSON_ONLY)).toBe(true);
+    const repair = JSON.parse(s.requests[1].user.slice(s.requests[1].user.indexOf("\n") + 1, -ACTOR_JSON_ONLY.length));
     expect(repair.originalInput).toEqual(input()); expect(repair.violations.length).toBeGreaterThan(0);
     expect(s.requests[1].user).not.toContain("938201"); expect(s.requests[1].system).toBe(ACTOR_SYSTEM_PROMPT);
   });

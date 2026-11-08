@@ -53,7 +53,7 @@ describe("Actor v2 controller assembly (src/server/actor/controller.ts)", async 
     for (const { snapshot, input, practiceCode } of [identity, fresh]) {
       const { snap, record } = stored(snapshot, input);
       const { input: actorInput, envelope } = assembleActor(snap, { record, candidate: input.candidates[0], trigger: trigger(snap), processingAttemptId: "pa-1", claimId: "claim-1", modelId: "fixture-actor" });
-      expect(envelope).toMatchObject({ sessionId: snap.session.id, planId: record.id, basedOnRevision: snap.session.revision, processingAttempt: 1, claimId: "claim-1", modelId: "fixture-actor", actorPromptVersion: "actor-prompt-v2" });
+      expect(envelope).toMatchObject({ sessionId: snap.session.id, planId: record.id, basedOnRevision: snap.session.revision, processingAttempt: 1, claimId: "claim-1", modelId: "fixture-actor", actorPromptVersion: "actor-prompt-v3" });
       const prompt = actorUserPrompt(actorInput);
       expect(prompt).not.toContain(OFFICIAL_RESULT);
       expect(prompt).not.toContain(practiceCode);

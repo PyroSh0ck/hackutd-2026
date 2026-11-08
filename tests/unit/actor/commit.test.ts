@@ -51,7 +51,7 @@ async function prepared(request = false) {
     o.input.instruction.target.issueId = "issue";
     o.input.instruction.additions = [...o.reserved];
     const { buildStyleProfile } = await import("@/server/actor/style"); o.input.styleProfile = buildStyleProfile(o.input.instruction);
-    s.deps.model.generate = vi.fn(async () => ({ ok: true as const, output: { text: "Case CD-123456 from Account Review. Will you share the practice code through the request card?", usedFactIds: [], introducedAdditionIds: ["case_reference", "team_label"] } }));
+    s.deps.model.generate = vi.fn(async () => ({ ok: true as const, output: { text: "Case CD-123456 from Account Review. Will you share the six-digit code we texted you?", usedFactIds: [], introducedAdditionIds: ["case_reference", "team_label"] } }));
   }
   const result = await runActor(o, s.deps); if (result.kind !== "prepared") throw new Error("fixture preparation failed"); return result;
 }

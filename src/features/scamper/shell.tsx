@@ -17,7 +17,7 @@ const NAV = [
 function Wordmark() {
   return (
     <span className={s.wordmark}>
-      SCAMPER
+      Cyber Sleuth
       <Sparkle className={s.wordmarkMark} aria-hidden strokeWidth={3} />
     </span>
   );
@@ -64,7 +64,7 @@ export function ScamperShell({ children }: { children: ReactNode }) {
     <div className={s.app}>
       <div className={s.shell}>
         <header className={s.topbar}>
-          <Link href="/scamper" className={s.brand} aria-label="SCAMPER home">
+          <Link href="/scamper" className={s.brand} aria-label="Cyber Sleuth home">
             <Wordmark />
           </Link>
           <button type="button" className={s.iconButton} aria-expanded={menuOpen} aria-controls={menuId} aria-label={menuOpen ? "Close menu" : "Open menu"} onClick={() => setMenuOpen((o) => !o)}>
@@ -72,7 +72,7 @@ export function ScamperShell({ children }: { children: ReactNode }) {
           </button>
         </header>
         <aside id={menuId} className={s.sidebar} data-open={menuOpen || undefined}>
-          <Link href="/scamper" className={s.brand} aria-label="SCAMPER home">
+          <Link href="/scamper" className={s.brand} aria-label="Cyber Sleuth home">
             <Wordmark />
             <p className={s.tagline}>Practice spotting customer scams</p>
           </Link>

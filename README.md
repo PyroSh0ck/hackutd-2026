@@ -1,6 +1,7 @@
-# SCAMPER: scam-defense practice with SpacetimeDB + NVIDIA Nemotron
+# Cyber Sleuth: scam-defense practice with SpacetimeDB + NVIDIA Nemotron
 
-SCAMPER is a consent-based, clearly fictional practice simulator. A player chats with a simulated sender
+Cyber Sleuth (internal code name SCAMPER; routes, ids and the database keep that name) is a consent-based,
+clearly fictional practice simulator. A player chats with a simulated sender
 (Nemotron), decides whom to trust, can check with "official support" through the app, and gets a review
 of what they did. Two scenarios exist:
 - `mobile-code-01`: a fraudulent "account security check" that asks for a fictional practice code;
@@ -97,7 +98,8 @@ observer decisions, planner protocol, tool calls with their call ids, and the ou
   - Legitimate notice: verified and declined endings.
 - **The sample is small.** The request typically appears after 2–5 player turns; turns take about 6–12 s, mostly the observer. Hosted-model latency and rate limits vary; a failed turn shows a **Retry reply** control.
 - **Legitimate scenario replies are functional but weak** (e.g. "I don't have that detail."), which is why `mobile-code-01` alone is recommended for judging.
-- **The opponent sometimes refers to the app's own controls** (request card, independent verification). This follows how the scenario facts are worded.
+- **Notice scenario gaps:** "What is this about?" can still get "I don't have that detail." (the topic gate is in the shared engine and needs a module republish to change).
+- **Chat behaviour (2026-11-08 fixes):** the player's message appears immediately; the reply is generated after the message is saved (`respond: "after_save"`) and the page follows the server's `turnStatus` (generating / paused with a reason / failed), including after a reload. The opponent stays in character (app controls and the simulation framing live in the app chrome only).
 - **Other limits:**
   - History is per anonymous cookie; it is not cross-device.
   - The legacy `/practice` page has no account portal.

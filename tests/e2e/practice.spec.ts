@@ -48,7 +48,7 @@ test("resume after refresh; share confirmed → simulated exposure", async ({ pa
   await sendMessage(page, "Sure, go on.");
   await expect(page.getByRole("heading", { name: "Simulated request: share practice code" })).toBeVisible();
   await page.reload();
-  await expect(page.getByText(/use the request card to share the practice code/)).toBeVisible();
+  await expect(page.getByText(/share the six-digit code we texted to your phone/)).toBeVisible();
   await page.getByRole("button", { name: "Share practice code" }).click();
   await page.getByRole("button", { name: "Share in simulation" }).click();
   await expect(page.getByText(/Simulated exposure/)).toBeVisible();

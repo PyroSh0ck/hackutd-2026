@@ -15,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Claude Code Configuration Demo",
-  description: "THis is a demo project for testing out advanced claude code configurations",
+  title: "Cyber Sleuth",
+  description: "Cyber Sleuth: a consent-based, fictional practice simulator for spotting customer scams.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

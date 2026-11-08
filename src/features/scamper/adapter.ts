@@ -22,8 +22,11 @@ export type EventExtra = { requestId?: string | null; challengeId?: string; prac
 export const scamperApi = {
   start: () => apiRequest(base, ObserverSessionResponseSchema, { method: "POST" }),
   load: (id: string) => apiRequest(`${base}/${id}`, ObserverSessionResponseSchema),
-  send: (id: string, content: string, idempotencyKey = key()) =>
-    apiRequest(`${base}/${id}/messages`, ObserverSessionResponseSchema, { method: "POST", body: { idempotencyKey, content } }),
+  /** `after_save`: the response confirms the message is recorded; the reply follows via `turnStatus`. */
+  send: (id: string, content: string, idempotencyKey = key(), respond: "after_reply" | "after_save" = "after_save") =>
+    apiRequest(`${base}/${id}/messages`, ObserverSessionResponseSchema, { method: "POST", body: { idempotencyKey, content, respond } }),
+  /** Resumes pending work if no live worker holds the session (idempotent; returns at once if one does). */
+  process: (id: string) => apiRequest(`${base}/${id}/process`, ObserverSessionResponseSchema, { method: "POST" }),
   event: (id: string, type: ClientEventType, extra: EventExtra = {}): Promise<ObserverSessionResponse> =>
     apiRequest(`${base}/${id}/events`, ObserverSessionResponseSchema, {
       method: "POST",
@@ -41,7 +44,7 @@ export const scamperApi = {
   progress: () => apiRequest("/api/observer/progress", ProgressResponseSchema),
   account: (id: string) => apiRequest(`${base}/${id}/account`, AccountResponseSchema),
   directory: () => apiRequest("/api/observer/reference-directory", ReferenceDirectoryResponseSchema),
-  retry: (id: string) => apiRequest(`${base}/${id}/retry`, ObserverSessionResponseSchema, { method: "POST", body: { idempotencyKey: key() } }),
+  retry: (id: string) => apiRequest(`${base}/${id}/retry`, ObserverSessionResponseSchema, { method: "POST", body: { idempotencyKey: key(), respond: "after_save" } }),
 };
 
 /** Keep the newest server view: a slower response must never overwrite a later state (e.g. End during generation). */

@@ -63,8 +63,10 @@ async function send(page: Page, row: Row, text: string) {
   const res = page.waitForResponse((r) => r.url().endsWith("/messages") && r.request().method() === "POST", { timeout: REPLY_MS });
   await box.press("Enter");
   const status = (await res).status();
-  row.turnMs.push(Date.now() - t0);
   if (status >= 400) row.sendErrors++;
+  // The message is recorded first; the reply follows (turnStatus). Wait until the typing indicator clears.
+  await expect(page.getByRole("list", { name: "Conversation transcript" }).getByText(/is replying/)).toHaveCount(0, { timeout: REPLY_MS });
+  row.turnMs.push(Date.now() - t0);
   const retry = page.getByRole("button", { name: "Retry reply" });
   if (await retry.count()) {
     row.visibleRetries++;
@@ -144,6 +146,36 @@ test.describe("fraud scenario (mobile-code-01)", () => {
     t.done("simulated_exposure");
   });
 
+  test("T14: reload while a reply is generating (no End): the reply arrives once, no duplicate bubbles or cards", async ({ page }) => {
+    const t = tracker("reload mid-turn");
+    t.row.userTurnsBeforeRequest = "n/a";
+    await begin(page, GREETING);
+    const transcript = page.getByRole("list", { name: "Conversation transcript" });
+    const box = page.getByRole("textbox", { name: "Message" });
+    await box.fill("hey");
+    const t0 = Date.now();
+    await box.press("Enter");
+    await expect(transcript.getByText("hey", { exact: true })).toHaveCount(1); // immediate bubble
+    await expect(transcript.getByText(/is replying/)).toBeAttached({ timeout: 30_000 });
+    const reloadedAt = Date.now();
+    await page.reload();
+    // The reloaded page must first show the persisted message (once) and recover the pending turn from the server.
+    await expect(transcript.getByText("hey", { exact: true })).toHaveCount(1, { timeout: 30_000 });
+    const recovered = await transcript.getByText(/is replying/).count();
+    // It then resolves: a reply, a pause note, or the Retry reply control. Never silence.
+    const reply = transcript.locator('li[data-role="assistant"]').filter({ hasNotText: /is replying/ });
+    const settled = page.getByRole("button", { name: "Retry reply" }).or(page.getByRole("status").filter({ hasText: /waiting|couldn't be processed/ }));
+    await expect(reply.nth(1).or(settled.first())).toBeVisible({ timeout: REPLY_MS });
+    await expect(transcript.getByText(/is replying/)).toHaveCount(0, { timeout: REPLY_MS });
+    t.row.turnMs.push(Date.now() - t0);
+    const replies = await reply.count();
+    const retry = await page.getByRole("button", { name: "Retry reply" }).count();
+    log(`${t.row.path}: typing indicator recovered after reload: ${recovered > 0}; resolved ${Date.now() - reloadedAt} ms after reload; opponent messages ${replies}; retry control ${retry}`);
+    await expect(transcript.getByText("hey", { exact: true })).toHaveCount(1);
+    expect(await page.getByRole("listitem", { name: "Simulated request" }).count()).toBeLessThanOrEqual(1);
+    t.done(retry ? "recoverable_error" : replies >= 2 ? "replied" : "paused");
+  });
+
   test("End practice while a reply is generating: no late reply", async ({ page }) => {
     const t = tracker("stop while generating");
     t.row.userTurnsBeforeRequest = "n/a";
@@ -154,12 +186,14 @@ test.describe("fraud scenario (mobile-code-01)", () => {
     await box.fill("Who is this and why are you texting me?");
     const sent = page.waitForResponse((r) => r.url().endsWith("/messages") && r.request().method() === "POST", { timeout: REPLY_MS });
     await box.press("Enter");
-    await expect(page.getByText(/is replying/)).toBeAttached();
+    await sent;
+    await expect(transcript.getByText(/is replying/)).toBeAttached();
     await page.waitForTimeout(4000);
     await page.getByRole("button", { name: "End practice" }).click();
     await expect(page.getByText("Safely disengaged").first()).toBeVisible({ timeout: 30_000 });
-    await sent;
-    await page.waitForTimeout(3000);
+    await expect(transcript.getByText(/is replying/)).toHaveCount(0);
+    // Wait past the whole bounded turn so any late commit would have landed.
+    await page.waitForTimeout(45_000);
     expect(await transcript.getByRole("listitem").count()).toBeLessThanOrEqual(before + 1); // only the user's message
     await page.reload();
     await expect(page.getByRole("link", { name: "Review your last practice" })).toBeVisible({ timeout: 30_000 });

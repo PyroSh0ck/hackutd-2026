@@ -6,6 +6,12 @@ import { apiRequest, errorMessage } from "@/lib/api-client";
 import { InlineError } from "./ui";
 import s from "./scamper.module.css";
 
+const RESOLUTION: Record<string, string> = {
+  accepted: "assessment validated",
+  corrected: "corrected by review",
+  unclear_fallback: "processing fallback (not a reading of the message)",
+};
+
 const BACKEND_LABEL = { spacetime: "SpacetimeDB module (authoritative)", postgres: "Postgres", memory: "In-memory (test)" } as const;
 
 /**
@@ -49,7 +55,18 @@ export function HowItWorked({ sessionId }: { sessionId: string }) {
                 </strong>
                 {t.observer && (
                   <span className={s.small}>
-                    Observer ({t.observer.model}): <b>{t.observer.decision.replaceAll("_", " ")}</b> · {t.observer.evidenceCount} quoted evidence · {t.observer.resolution} · review {t.observer.reviewStatus}
+                    Observer ({t.observer.model}):{" "}
+                    {t.observer.scope === "conversation" ? (
+                      <>
+                        <b>no request yet</b> (a request decision is not applicable)
+                        {t.observer.proposedDecision && t.observer.proposedDecision !== "unclear" ? ` · model read: ${t.observer.proposedDecision.replaceAll("_", " ")}` : ""}
+                      </>
+                    ) : (
+                      <>
+                        <b>{t.observer.decision.replaceAll("_", " ")}</b> · {t.observer.evidenceCount} quoted evidence
+                      </>
+                    )}{" "}
+                    · {RESOLUTION[t.observer.resolution] ?? t.observer.resolution} · review {t.observer.reviewStatus.replaceAll("_", " ")}
                   </span>
                 )}
                 {t.planner && (
@@ -58,6 +75,8 @@ export function HowItWorked({ sessionId }: { sessionId: string }) {
                     {t.planner.failureReason ? ` (${t.planner.failureReason})` : ""}
                   </span>
                 )}
+                {!t.planner && t.noReply && <span className={s.small}>Planner not run: {t.noReply}</span>}
+                {t.planner && t.noReply && <span className={`${s.small} ${s.muted}`}>{t.noReply}</span>}
                 {t.planner?.toolCalls.map((c) => (
                   <span key={c.callId + c.name} className={`${s.small} ${s.muted}`}>
                     Tool <code>{c.name}</code> → {c.status === "executing" ? (t.planner!.status === "committed" ? "committed" : t.planner!.status) : c.status} · call {c.callId.slice(0, 18)}
