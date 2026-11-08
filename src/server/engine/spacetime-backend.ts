@@ -25,7 +25,7 @@ export function spacetimeConfigFromEnv(): SpacetimeConfig | null {
   const { SPACETIME_URL, SPACETIME_DATABASE, SPACETIME_TOKEN } = process.env;
   if (SPACETIME_URL && SPACETIME_DATABASE && SPACETIME_TOKEN) return { url: SPACETIME_URL, database: SPACETIME_DATABASE, token: SPACETIME_TOKEN };
   try {
-    const file = JSON.parse(readFileSync(join(process.cwd(), process.env.SPACETIME_WORKER_FILE ?? join(".spacetime", "worker.json")), "utf8")) as Partial<SpacetimeConfig>;
+    const file = JSON.parse(readFileSync(join(process.cwd(), process.env.SPACETIME_WORKER_FILE || join(".spacetime", "worker.json")), "utf8")) as Partial<SpacetimeConfig>;
     if (file.url && file.database && file.token) return { url: file.url, database: file.database, token: file.token };
   } catch {
     /* not configured */

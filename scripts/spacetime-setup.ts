@@ -15,7 +15,7 @@ import { dirname, join } from "node:path";
 const url = process.env.SPACETIME_URL ?? "http://127.0.0.1:3300";
 const database = process.env.SPACETIME_DATABASE ?? "scamper-training";
 const server = process.env.SPACETIME_SERVER ?? "stdb-local";
-const file = process.env.SPACETIME_WORKER_FILE ?? join(".spacetime", "worker.json");
+const file = process.env.SPACETIME_WORKER_FILE || join(".spacetime", "worker.json");
 const cli = process.env.SPACETIME_CLI ?? join(homedir(), ".local", "bin", "spacetime");
 
 async function main() {

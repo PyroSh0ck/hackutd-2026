@@ -14,6 +14,7 @@ import {
 } from "@/contracts/observer";
 import { assertObserverInput, contextFor, validateCandidate } from "./evidence";
 import { reviewFlags } from "./flags";
+import { clearConversationDecisionEvidence, pruneUnsupportedIssues } from "./issue-support";
 import { providerSchema, type StructuredModel, type StructuredRequest, type StructuredResult } from "./model";
 import { OBSERVER_SYSTEM_PROMPT, observerUserPrompt, repairUserPrompt, REVIEWER_SYSTEM_PROMPT, reviewerUserPrompt } from "./prompts";
 import { resolveReview, validateReview } from "./review";
@@ -87,6 +88,7 @@ export async function runObserver(input: ObserverInput, deps: RunDeps): Promise<
     attempts,
     calls,
     ...o,
+    finalAssessment: pruneUnsupportedIssues(o.finalAssessment),
   });
   const fallback = (failureReason: FailureReason, reviewStatus: RunOutcome["reviewStatus"] = "not_requested", reviewerResponse: ReviewerResponse | null = null) =>
     outcome({ finalAssessment: fallbackAssessment(input), reviewStatus, reviewerResponse, resolution: "unclear_fallback", failureReason });
@@ -124,7 +126,8 @@ export async function runObserver(input: ObserverInput, deps: RunDeps): Promise<
       validation = { structurallyValid: false, evidenceReferencesValid: false, errors, reviewFlags: [] };
       return { candidate: null, errors, raw: result.rawOutput ?? null };
     }
-    const v = validateCandidate(result.output, ctx);
+    const output = ctx.scope === "conversation" ? clearConversationDecisionEvidence(result.output) : result.output;
+    const v = validateCandidate(output, ctx);
     attempt.validationErrors = v.errors;
     validation = { structurallyValid: v.structurallyValid, evidenceReferencesValid: v.evidenceReferencesValid, errors: v.errors, reviewFlags: [] };
     const parsed = ObserverAssessmentSchema.safeParse(result.output);

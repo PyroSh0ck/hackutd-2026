@@ -56,9 +56,23 @@ export default defineConfig({
       AGENT_DEBUG: "1",
       // Existing suites assume the fraud scenario; legitimate-scenario specs create sessions explicitly (test-gated).
       PRACTICE_SCENARIOS: process.env.PRACTICE_SCENARIOS ?? "mobile-code-01",
-      // Optional: run the same suites with SpacetimeDB as the training authority / the tool-calling planner.
-      ...(process.env.TRAINING_BACKEND ? { TRAINING_BACKEND: process.env.TRAINING_BACKEND } : {}),
-      ...(process.env.PLANNER_PROTOCOL ? { PLANNER_PROTOCOL: process.env.PLANNER_PROTOCOL } : {}),
+      // `next start` also loads .env.local (the developer's live settings). Empty values take precedence over
+      // env files, so tests never inherit live model keys, a hosted SpacetimeDB, or a backend choice from it.
+      MODEL_BASE_URL: "",
+      MODEL_API_KEY: "",
+      MODEL_ID: "",
+      OBSERVER_MODEL_ID: "",
+      REVIEWER_MODEL_ID: "",
+      PLANNER_MODEL_ID: "",
+      ACTOR_MODEL_ID: "",
+      SPACETIME_URL: "",
+      SPACETIME_DATABASE: "",
+      SPACETIME_TOKEN: "",
+      // Optional, from the shell only: run the same suites with SpacetimeDB as the training authority / the
+      // tool-calling planner (credentials from .spacetime/worker.json, or SPACETIME_WORKER_FILE).
+      TRAINING_BACKEND: process.env.TRAINING_BACKEND ?? "",
+      PLANNER_PROTOCOL: process.env.PLANNER_PROTOCOL ?? "",
+      SPACETIME_WORKER_FILE: process.env.SPACETIME_WORKER_FILE ?? "",
     },
   },
 });
