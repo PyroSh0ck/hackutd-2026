@@ -9,7 +9,8 @@ import { redactModelData } from "./input";
 import { buildStyleProfile, computeStyleMetrics } from "./style";
 import { gateViolations, validateActorOutput, type ActorGate } from "./validate";
 
-export const ACTOR_FAILURE_NOTICE = "The practice response couldn't be generated. You can retry or end this session.";
+import { ACTOR_FAILURE_NOTICE } from "@/server/engine/decide";
+export { ACTOR_FAILURE_NOTICE };
 export type ActorExecutionState = ActorGate & {
   sessionId: string; ownerKey: string; claimId: string | null; claimValid: boolean;
   policyVersion: string; planApplicable: boolean;

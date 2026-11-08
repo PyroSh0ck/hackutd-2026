@@ -19,9 +19,10 @@ import { reusePlan, runPlanningTurn } from "@/server/planner/run";
 import { commitActorResponse } from "@/server/actor/commit";
 import { actorAudit, assembleActor, executionState, knownSecretsOf, reservedOf, StoreActorCommitPort } from "@/server/actor/controller";
 import type { ActorModel } from "@/server/actor/model";
-import { ACTOR_FAILURE_NOTICE, runActor } from "@/server/actor/run";
-import { MOBILE_CODE_SCENARIO, TEAM_LABEL, type ScenarioDefinition } from "@/server/planner/scenario";
-import { stopIntent } from "@/server/planner/stop-intent";
+import { runActor } from "@/server/actor/run";
+import { StoreBackend, VersionConflictError, type TrainingBackend } from "@/server/engine/backend";
+import { decideIssues, technicalNotice, turnLimitDue, type Rejection } from "@/server/engine/decide";
+import { MOBILE_CODE_SCENARIO, type ScenarioDefinition } from "@/server/planner/scenario";
 import type { StructuredModel } from "./model";
 import { traced, type TraceInput, type TraceSink } from "./trace";
 import { plannerObservation } from "./planner-input";
@@ -29,11 +30,8 @@ import { RUBRIC_VERSION } from "./rubric";
 import { runObserver } from "./run";
 import {
   buildObserverInput,
-  eventChange,
   finalDecisionProceeded,
-  issueChangesFor,
   pendingWork,
-  planEvent,
   publicEvent,
   publicIssue,
   publicMessage,
@@ -43,7 +41,7 @@ import {
   stopConfirmationPending,
   verificationState,
 } from "./state";
-import type { AdditionRow, EventRow, InputChange, MessageRow, ObserverStore, RequestRow, Snapshot } from "./store/types";
+import type { ObserverStore, Snapshot } from "./store/types";
 
 /**
  * Practice-session service: ownership, idempotent inputs, event applicability, the session lifecycle, and
@@ -61,7 +59,10 @@ export type PlanningOptions = {
 };
 
 export type ObserverServiceOptions = {
-  store: ObserverStore;
+  /** Postgres/memory persistence (wrapped in a StoreBackend). Ignored when `backend` is given. */
+  store?: ObserverStore;
+  /** Authoritative training backend (e.g. SpacetimeDB). Defaults to a StoreBackend over `store`. */
+  backend?: TrainingBackend;
   models: () => { observer: StructuredModel | null; reviewer: StructuredModel | null };
   policy: ReviewPolicy;
   timeoutMs: number;
@@ -78,7 +79,6 @@ export type ObserverServiceOptions = {
 
 export type ProcessingResult = { status: "processed" | "queued" | "idle"; assessed: number; stale: number };
 
-const APPEND_ATTEMPTS = 5;
 const PROCESS_PASSES = 3;
 const MAX_STEPS_PER_PASS = 10;
 
@@ -94,6 +94,8 @@ function canonical(value: unknown): string {
 }
 const hashOf = (value: unknown) => createHash("sha256").update(canonical(value)).digest("hex");
 const rejected = (reason: string, message: string) => new HttpError(422, "ACTION_REJECTED", message, { reason });
+const fromRejection = (r: Rejection) => new HttpError(r.status, r.code, r.message, { reason: r.reason });
+const idempotencyConflict = () => new HttpError(409, "IDEMPOTENCY_CONFLICT", "That idempotency key was used for a different submission.");
 
 type PlanningWork =
   | { kind: "resume"; record: PlanRecord }
@@ -104,6 +106,7 @@ export class ObserverService {
   private readonly now: () => Date;
   private readonly leaseMs: number;
   readonly scenario: ScenarioDefinition;
+  readonly backend: TrainingBackend;
   private readonly lastEligibility = new Map<string, string>();
   /** In-process cancellation of actor generation when the session changes (stop, verification, new input). */
   private readonly inflight = new Map<string, AbortController>();
@@ -113,6 +116,8 @@ export class ObserverService {
     this.now = options.now ?? (() => new Date());
     this.scenario = options.scenario ?? MOBILE_CODE_SCENARIO;
     this.leaseMs = options.leaseMs ?? options.timeoutMs * 3 + (options.planning ? options.planning.timeoutMs * 4 : 0) + 30_000;
+    if (!options.backend && !options.store) throw new Error("ObserverService needs a store or a backend.");
+    this.backend = options.backend ?? new StoreBackend(options.store!, { scenario: this.scenario, newId: this.newId, now: this.now });
   }
 
   private emit(sessionId: string, entry: TraceInput) {
@@ -130,21 +135,14 @@ export class ObserverService {
   // ------------------------------------------------------------------ reads
 
   private async owned(ownerKey: string, sessionId: string): Promise<Snapshot> {
-    const snapshot = await this.options.store.load(sessionId);
+    const snapshot = await this.backend.load(sessionId);
     if (!snapshot || snapshot.session.ownerKey !== ownerKey) throw new NotFoundError("Observer session");
     return snapshot;
   }
 
   /** Neutral technical notice for the latest input whose planning failed (planner brief §9). */
   technicalNotice(s: Snapshot): ObserverSessionView["technicalNotice"] {
-    const trigger = triggerOf(s);
-    if (!trigger) return null;
-    const records = s.plans.filter((p) => p.inputId === trigger.id);
-    if (records.some((p) => p.status === "committed")) return null;
-    const failures = records.filter((p) => p.status === "failed" || p.status === "rejected").length;
-    if (!failures) return null;
-    const retried = s.events.some((e) => e.type === "planning_retry_requested" && e.detail === trigger.id);
-    return { inputId: trigger.id, attempts: failures, canRetry: failures === 1 && !retried && !s.session.ended, message: ACTOR_FAILURE_NOTICE };
+    return technicalNotice(s);
   }
 
   view(s: Snapshot): ObserverSessionView {
@@ -203,61 +201,8 @@ export class ObserverService {
   // ------------------------------------------------------------------ writes
 
   async createSession(ownerKey: string): Promise<ObserverSessionResponse> {
-    const id = this.newId();
-    const at = this.now().toISOString();
-    const opening: MessageRow = { id: this.newId(), sessionId: id, turn: 0, role: "assistant", content: this.scenario.opening, createdAt: at, revision: 1 };
-    const requests: RequestRow[] = this.scenario.openingRequests.map((r) => ({ id: this.newId(), introducedByMessageId: opening.id, targetAction: r.targetAction, description: r.description, status: "open", revision: 1 }));
-    const { practiceCode, caseReference } = this.scenario.reserve();
-    const additions: AdditionRow[] = this.scenario.request
-      ? [...(caseReference ? [{ id: "case_reference" as const, text: caseReference, introducedMessageId: null }] : []), { id: "team_label", text: TEAM_LABEL, introducedMessageId: null }]
-      : [];
-    await this.options.store.createSession(
-      {
-        id,
-        ownerKey,
-        threadId: this.newId(),
-        scenarioId: this.scenario.id,
-        scenarioVersion: this.scenario.version,
-        revision: 1,
-        conversationRevision: 1,
-        turn: 0,
-        ended: false,
-        stage: "active",
-        outcome: null,
-        practiceCode,
-        caseReference,
-        createdAt: at,
-      },
-      { messages: [opening], requests, additions },
-    );
+    const id = await this.backend.createSession(ownerKey);
     return this.getSession(ownerKey, id);
-  }
-
-  /** CAS append with a bounded re-read loop. Returns the committed snapshot or a receipt race. */
-  private async append(sessionId: string, build: (s: Snapshot) => InputChange): Promise<{ ok: true; snapshot: Snapshot } | { ok: false; conflict: "receipt" }> {
-    for (let i = 0; i < APPEND_ATTEMPTS; i++) {
-      const snapshot = (await this.options.store.load(sessionId))!;
-      const result = await this.options.store.append(sessionId, snapshot.session.revision, build(snapshot));
-      if (result.ok) return { ok: true, snapshot: (await this.options.store.load(sessionId))! };
-      if (result.conflict === "receipt") return { ok: false, conflict: "receipt" };
-    }
-    throw new HttpError(409, "VERSION_CONFLICT", "The conversation is busy. Try again.");
-  }
-
-  private serverEvent(s: Snapshot, type: EventRow["type"], detail: string | null, requestId: string | null = null): EventRow {
-    return { id: this.newId(), sessionId: s.session.id, requestId, turn: s.session.turn, type, challengeId: null, detail, createdAt: this.now().toISOString(), revision: s.session.revision + 1 };
-  }
-
-  /** Inputs after termination are rejected and audited (planner brief §4). */
-  private async auditAfterEnd(sessionId: string, attempted: string): Promise<never> {
-    await this.append(sessionId, (s) => ({ events: [this.serverEvent(s, "event_rejected_after_end", attempted)] })).catch(() => undefined);
-    throw rejected("SESSION_ENDED", "The practice conversation has ended.");
-  }
-
-  private async receiptDuplicate(sessionId: string, key: string, payloadHash: string) {
-    const receipt = await this.options.store.findReceipt(sessionId, key);
-    if (!receipt || receipt.payloadHash !== payloadHash) throw new HttpError(409, "IDEMPOTENCY_CONFLICT", "That idempotency key was used for a different submission.");
-    return receipt;
   }
 
   private async processQuietly(sessionId: string): Promise<ProcessingResult> {
@@ -266,60 +211,39 @@ export class ObserverService {
     return this.processPending(sessionId).catch(() => ({ status: "queued" as const, assessed: 0, stale: 0 }));
   }
 
+  /** Maps a backend outcome that is not a fresh commit to the HTTP contract. */
+  private settle(result: { kind: "ended" } | { kind: "rejected"; rejection: Rejection }): never {
+    if (result.kind === "ended") throw rejected("SESSION_ENDED", "The practice conversation has ended.");
+    throw fromRejection(result.rejection);
+  }
+
+  private async write<T>(work: () => Promise<T>): Promise<T> {
+    try {
+      return await work();
+    } catch (error) {
+      if (error instanceof VersionConflictError) throw new HttpError(409, "VERSION_CONFLICT", error.message);
+      throw error;
+    }
+  }
+
   async submitMessage(ownerKey: string, sessionId: string, request: SubmitMessageRequest): Promise<ObserverSessionResponse> {
-    const before = await this.owned(ownerKey, sessionId);
+    await this.owned(ownerKey, sessionId);
     const payloadHash = hashOf({ kind: "message", content: request.content });
-    const duplicate = async () => {
-      await this.receiptDuplicate(sessionId, request.idempotencyKey, payloadHash);
+    const result = await this.write(() => this.backend.submitMessage(sessionId, { key: request.idempotencyKey, content: request.content, payloadHash }));
+    if (result.kind === "duplicate") {
+      if (result.receipt.payloadHash !== payloadHash) throw idempotencyConflict();
       // Resumes processing only if work is genuinely pending (e.g. after a crash); never re-assesses.
       const processing = await this.processQuietly(sessionId);
       return { session: this.view(await this.owned(ownerKey, sessionId)), processing, duplicate: true };
-    };
-    if (await this.options.store.findReceipt(sessionId, request.idempotencyKey)) return duplicate();
-    const gate = (s: Snapshot) => {
-      if (s.session.ended) return "ended" as const;
-      if (s.session.stage === "verifying" || s.session.stage === "awaiting_final_decision") throw rejected("STAGE_PAUSED", "The conversation is paused while you verify or decide.");
-      if (stopConfirmationPending(s.events)) throw rejected("STOP_CONFIRMATION_PENDING", "Confirm whether you want to end the practice first.");
-      if (s.session.turn >= this.scenario.maxUserTurns) throw rejected("TURN_LIMIT", "This practice conversation has reached its turn limit.");
-      return "ok" as const;
-    };
-    if (gate(before) === "ended") return this.auditAfterEnd(sessionId, "message");
-
-    const messageId = this.newId();
-    const intent = stopIntent(request.content);
-    let endedNow = false;
-    const committed = await this.append(sessionId, (s) => {
-      if (gate(s) === "ended") throw rejected("SESSION_ENDED", "The practice conversation has ended.");
-      const turn = s.session.turn + 1;
-      const revision = s.session.revision + 1;
-      const message: MessageRow = { id: messageId, sessionId, turn, role: "user", content: request.content, createdAt: this.now().toISOString(), revision };
-      const receipt = { key: request.idempotencyKey, kind: "message" as const, payloadHash, resultId: messageId, challengeId: null };
-      const at = this.now().toISOString();
-      if (intent === "clear") {
-        endedNow = true;
-        // Explicit out-of-character stop: terminal in the same commit; no model work follows.
-        return {
-          messages: [message],
-          turn,
-          receipt,
-          events: [{ id: this.newId(), sessionId, requestId: null, turn, type: "conversation_ended", challengeId: null, detail: "text_stop", createdAt: at, revision }],
-          closeRequestIds: s.requests.filter((r) => r.status === "open").map((r) => r.id),
-          stage: "ended",
-          outcome: "safely_disengaged",
-          ended: true,
-        };
-      }
-      if (intent === "ambiguous") {
-        return { messages: [message], turn, receipt, events: [{ id: this.newId(), sessionId, requestId: null, turn, type: "stop_confirmation_requested", challengeId: null, detail: null, createdAt: at, revision }] };
-      }
-      return { messages: [message], turn, receipt };
-    });
-    if (!committed.ok) return duplicate();
+    }
+    if (result.kind !== "committed") this.settle(result);
+    const { messageId, intent, endedNow } = result;
     this.inflight.get(sessionId)?.abort();
-    this.emit(sessionId, { inputId: messageId, step: "input.received", agent: "server", title: "User message committed", status: "info", data: { content: request.content, stopIntent: intent, turn: committed.snapshot.session.turn } });
+    const committed = await this.owned(ownerKey, sessionId);
+    this.emit(sessionId, { inputId: messageId, step: "input.received", agent: "server", title: `User message committed (${this.backend.name})`, status: "info", data: { content: request.content, stopIntent: intent, turn: committed.session.turn, backend: this.backend.name } });
     if (endedNow) {
       this.emit(sessionId, { inputId: messageId, step: "session.event", agent: "server", title: "Clear textual stop: session ended (safely_disengaged); no model calls", status: "info", data: { outcome: "safely_disengaged" } });
-      return { session: this.view(committed.snapshot), processing: { status: "idle", assessed: 0, stale: 0 } };
+      return { session: this.view(committed), processing: { status: "idle", assessed: 0, stale: 0 } };
     }
     if (intent === "ambiguous") this.emit(sessionId, { inputId: messageId, step: "session.event", agent: "server", title: "Ambiguous stop: confirmation requested; opponent paused", status: "warn", data: {} });
     const processing = await this.processQuietly(sessionId);
@@ -334,63 +258,42 @@ export class ObserverService {
 
   /** One user-requested retry of a failed planning attempt for the same input (planner brief §9). */
   async retry(ownerKey: string, sessionId: string, request: RetryRequest): Promise<ObserverSessionResponse> {
-    const before = await this.owned(ownerKey, sessionId);
+    await this.owned(ownerKey, sessionId);
     const payloadHash = hashOf({ kind: "retry" });
-    if (await this.options.store.findReceipt(sessionId, request.idempotencyKey)) {
-      await this.receiptDuplicate(sessionId, request.idempotencyKey, payloadHash);
+    const result = await this.write(() => this.backend.retry(sessionId, { key: request.idempotencyKey, payloadHash }));
+    if (result.kind === "duplicate") {
+      if (result.receipt.payloadHash !== payloadHash) throw idempotencyConflict();
       return { session: this.view(await this.owned(ownerKey, sessionId)), duplicate: true };
     }
-    if (before.session.ended) return this.auditAfterEnd(sessionId, "retry");
-    const eventId = this.newId();
-    const committed = await this.append(sessionId, (s) => {
-      const notice = this.technicalNotice(s);
-      if (!notice?.canRetry) throw rejected("RETRY_NOT_AVAILABLE", "There is nothing to retry.");
-      return { events: [{ ...this.serverEvent(s, "planning_retry_requested", notice.inputId), id: eventId }], receipt: { key: request.idempotencyKey, kind: "retry", payloadHash, resultId: eventId, challengeId: null } };
-    });
-    if (!committed.ok) return { session: this.view(await this.owned(ownerKey, sessionId)), duplicate: true };
+    if (result.kind !== "committed") this.settle(result);
     const processing = await this.processQuietly(sessionId);
     return { session: this.view(await this.owned(ownerKey, sessionId)), processing };
   }
 
   async submitEvent(ownerKey: string, sessionId: string, request: SubmitEventRequest): Promise<ObserverSessionResponse> {
-    const before = await this.owned(ownerKey, sessionId);
+    await this.owned(ownerKey, sessionId);
     // The practice code is checked but never hashed or stored: the receipt binds only its presence.
     const payloadHash = hashOf({ kind: "event", type: request.type, requestId: request.requestId, challengeId: request.challengeId ?? null, code: Boolean(request.practiceCode), linkedIssueId: request.linkedIssueId ?? null });
-    const duplicate = async () => {
-      const receipt = await this.receiptDuplicate(sessionId, request.idempotencyKey, payloadHash);
-      return { session: this.view(await this.owned(ownerKey, sessionId)), duplicate: true, ...(receipt.challengeId ? { challengeId: receipt.challengeId } : {}) };
-    };
-    if (await this.options.store.findReceipt(sessionId, request.idempotencyKey)) return duplicate();
-    if (before.session.ended) return this.auditAfterEnd(sessionId, request.type);
-
-    let challengeId: string | null = null;
-    let issued = false;
-    let eventId = "";
-    const committed = await this.append(sessionId, (s) => {
-      const plan = planEvent(s, request, this.scenario);
-      if (!plan.ok) throw rejected(plan.reason, plan.message);
-      issued = plan.issueChallenge;
-      challengeId = plan.issueChallenge ? this.newId() : null;
-      const { change, primaryId } = eventChange(plan, { sessionId, turn: s.session.turn, revision: s.session.revision + 1, at: this.now().toISOString(), ids: this.newId, challengeId });
-      eventId = primaryId;
-      return { ...change, receipt: { key: request.idempotencyKey, kind: "event", payloadHash, resultId: primaryId, challengeId } };
-    });
-    if (!committed.ok) return duplicate();
+    const result = await this.write(() => this.backend.submitEvent(sessionId, request, payloadHash));
+    if (result.kind === "duplicate") {
+      if (result.receipt.payloadHash !== payloadHash) throw idempotencyConflict();
+      return { session: this.view(await this.owned(ownerKey, sessionId)), duplicate: true, ...(result.receipt.challengeId ? { challengeId: result.receipt.challengeId } : {}) };
+    }
+    if (result.kind !== "committed") this.settle(result);
     // Stop, verification, rejection and any other event invalidate in-flight generation.
     this.inflight.get(sessionId)?.abort();
-    this.emit(sessionId, { inputId: eventId, step: "input.received", agent: "server", title: `UI event: ${request.type}`, status: "info", data: { type: request.type, requestId: request.requestId, stage: committed.snapshot.session.stage, outcome: committed.snapshot.session.outcome } });
+    const committed = await this.owned(ownerKey, sessionId);
+    this.emit(sessionId, { inputId: result.eventId, step: "input.received", agent: "server", title: `UI event: ${request.type} (${this.backend.name})`, status: "info", data: { type: request.type, requestId: request.requestId, stage: committed.session.stage, outcome: committed.session.outcome, backend: this.backend.name } });
     // A rejection is a planning input (acknowledge the boundary); nothing else triggers opponent generation.
-    const processing = request.type === "request_rejected" && !committed.snapshot.session.ended ? await this.processQuietly(sessionId) : undefined;
-    const session = processing ? this.view(await this.owned(ownerKey, sessionId)) : this.view(committed.snapshot);
-    return { session, ...(processing ? { processing } : {}), ...(issued && challengeId ? { challengeId } : {}) };
+    const processing = request.type === "request_rejected" && !committed.session.ended ? await this.processQuietly(sessionId) : undefined;
+    const session = processing ? this.view(await this.owned(ownerKey, sessionId)) : this.view(committed);
+    return { session, ...(processing ? { processing } : {}), ...(result.challengeId ? { challengeId: result.challengeId } : {}) };
   }
 
   // ------------------------------------------------------------------ processing
 
   private turnLimitDue(s: Snapshot): boolean {
-    if (s.session.ended || pendingWork(s)) return false;
-    const last = [...s.messages].reverse().find((m) => m.role === "user");
-    return Boolean(last && last.turn >= this.scenario.maxUserTurns);
+    return turnLimitDue(s, this.scenario);
   }
 
   /** What the planner should do next, if anything. Deterministic; wait/controller results need no record. */
@@ -432,48 +335,13 @@ export class ObserverService {
   }
 
   private async commitPrepared(s: Snapshot, record: PlanRecord, claimId: string): Promise<"committed" | "stale" | "duplicate"> {
-    const candidate = record.candidateSnapshot.find((c) => c.id === record.acceptedPlan?.candidateId);
-    if (!candidate || !record.actorOutput || !this.scenario.request) {
-      await this.options.store.savePlan({ ...record, status: "stale" });
-      return "stale";
-    }
-    const revision = record.basedOnRevision + 1;
-    const at = this.now().toISOString();
-    const message: MessageRow = { id: this.newId(), sessionId: s.session.id, turn: s.session.turn, role: "assistant", content: record.actorOutput.text, createdAt: at, revision };
-    const requests: RequestRow[] =
-      candidate.toolIntent === "present_practice_code_request"
-        ? [{ id: this.newId(), introducedByMessageId: message.id, targetAction: this.scenario.request.targetAction, description: this.scenario.request.description, status: "open", revision }]
-        : [];
-    const events: EventRow[] = requests.map((r) => ({ id: this.newId(), sessionId: s.session.id, requestId: r.id, turn: s.session.turn, type: "request_presented", challengeId: null, detail: "planner", createdAt: at, revision }));
-    const introduced = new Set(s.additions.filter((a) => a.introducedMessageId !== null).map((a) => a.id));
-    return this.options.store.commitPlan({
-      record: { ...record, status: "committed", committedMessageId: message.id },
-      claimId,
-      now: this.now(),
-      message,
-      requests,
-      events,
-      addressIssueId: candidate.issueId,
-      introduceAdditionIds: record.actorOutput.introducedAdditionIds.filter((id) => !introduced.has(id)),
-    });
+    return (await this.backend.commitPrepared(s.session.id, record, claimId)).kind;
   }
 
   /** Records a technical failure: neutral notice, no other mutation; the second failure ends the session. */
   private async technicalFailure(sessionId: string, record: PlanRecord, work: Extract<PlanningWork, { kind: "plan" }>): Promise<"failed"> {
-    await this.options.store.savePlan(record);
     this.emit(sessionId, { inputId: work.trigger.id, step: "session.event", agent: "server", title: work.attempt < 2 ? "Technical notice shown; one retry available; no state changed" : "Second failure: session ended (technical_interruption)", status: "fail", data: { attempt: work.attempt, failureReason: record.failureReason } });
-    await this.append(sessionId, (now) => {
-      if (now.session.ended) return {};
-      const notice = this.serverEvent(now, "planning_failed", `${work.trigger.id}:${work.attempt}`);
-      if (work.attempt < 2) return { events: [notice] };
-      return {
-        events: [notice, this.serverEvent(now, "technical_interruption", work.trigger.id)],
-        closeRequestIds: now.requests.filter((r) => r.status === "open").map((r) => r.id),
-        stage: "ended",
-        outcome: "technical_interruption",
-        ended: true,
-      };
-    });
+    await this.backend.recordTechnicalFailure(sessionId, record, work.trigger.id, work.attempt);
     return "failed";
   }
 
@@ -482,7 +350,7 @@ export class ObserverService {
       // Crash after a prepared response: commit it without new model calls if nothing changed; else audit
       // stale. A plan whose actor never finished is not resumed (no automatic rerun).
       if (!work.record.actorOutput || work.record.basedOnRevision !== s.session.revision || s.session.stage !== "active") {
-        await this.options.store.savePlan({ ...work.record, status: "stale" });
+        await this.backend.savePlan({ ...work.record, status: "stale" });
         return "stale";
       }
       const result = await this.commitPrepared(s, work.record, claimId);
@@ -514,11 +382,11 @@ export class ObserverService {
 
     // 2. Actor v2 (≤2 calls). The plan is stored first so applicability can be checked against it.
     let record: PlanRecord = { ...planned.record, actorModelId: actorModel?.modelId ?? "unconfigured" };
-    await this.options.store.savePlan(record);
+    await this.backend.savePlan(record);
     const candidate = record.candidateSnapshot.find((c) => c.id === record.acceptedPlan!.candidateId)!;
     const processingAttemptId = this.newId();
     const binding = { record, candidate, trigger: work.trigger, processingAttemptId, claimId, modelId: actorModel?.modelId ?? "unconfigured" };
-    const fresh = async () => (await this.options.store.load(sessionId))!;
+    const fresh = async () => (await this.backend.load(sessionId))!;
     let assembled: ReturnType<typeof assembleActor>;
     try {
       assembled = assembleActor(await fresh(), binding);
@@ -551,7 +419,7 @@ export class ObserverService {
       data: { kind: result.kind, calls: result.calls, attempts: result.attempts, ...(result.kind === "prepared" ? { output: result.output, styleMetrics: result.styleMetrics } : {}), ...(result.kind === "failed" ? { reason: result.reason, notice: result.notice, endReason: result.endReason } : {}) },
     });
     if (result.kind === "discarded") {
-      await this.options.store.savePlan({ ...record, status: "stale" });
+      await this.backend.savePlan({ ...record, status: "stale" });
       return "stale";
     }
     if (result.kind === "failed") {
@@ -560,8 +428,8 @@ export class ObserverService {
     }
     // 3. Prepared is server-only; it is delivered only after the atomic commit.
     record = { ...record, actorOutput: result.output };
-    await this.options.store.savePlan(record);
-    const port = new StoreActorCommitPort({ store: this.options.store, sessionId, claimId, now: this.now, newId: this.newId, scenario: this.scenario, record, candidate });
+    await this.backend.savePlan(record);
+    const port = new StoreActorCommitPort({ backend: this.backend, sessionId, claimId, now: this.now, newId: this.newId, scenario: this.scenario, record, candidate });
     const delivery = await commitActorResponse(result, port);
     this.emit(sessionId, {
       inputId,
@@ -573,7 +441,7 @@ export class ObserverService {
     });
     if (delivery.kind === "delivered") return "committed";
     if (delivery.kind === "discarded") {
-      await this.options.store.savePlan({ ...record, status: "stale" });
+      await this.backend.savePlan({ ...record, status: "stale" });
       return "stale";
     }
     return this.technicalFailure(sessionId, { ...record, status: "failed", failureReason: "actor_http_error" }, work);
@@ -610,8 +478,9 @@ export class ObserverService {
       application: "applied",
       createdAt: this.now().toISOString(),
     };
-    const issues = issueChangesFor(snapshot, record, this.newId);
-    const applied = await this.options.store.applyAssessment(record, claimId, this.now(), issues);
+    const applied = await this.backend.applyAssessment(record, claimId);
+    // Issue changes are derived by the backend from its own state; this preview is for the trace only.
+    const issues = decideIssues(snapshot, record, () => "(assigned by backend)");
     this.emit(sessionId, {
       inputId: work.message.id,
       step: "observer.result",
@@ -645,12 +514,12 @@ export class ObserverService {
     let stale = 0;
     for (let pass = 0; pass < PROCESS_PASSES; pass++) {
       const claimId = this.newId();
-      if (!(await this.options.store.claim(sessionId, claimId, this.now(), this.leaseMs))) {
+      if (!(await this.backend.claim(sessionId, claimId, this.leaseMs))) {
         return { status: pass === 0 && assessed + stale === 0 ? "queued" : "processed", assessed, stale };
       }
       try {
         for (let step = 0; step < MAX_STEPS_PER_PASS; step++) {
-          const snapshot = await this.options.store.load(sessionId);
+          const snapshot = await this.backend.load(sessionId);
           if (!snapshot) break;
           const work = pendingWork(snapshot);
           if (work) {
@@ -666,17 +535,7 @@ export class ObserverService {
           }
           if (this.turnLimitDue(snapshot)) {
             this.emit(sessionId, { inputId: triggerOf(snapshot)?.id ?? null, step: "session.event", agent: "server", title: "Turn limit reached: session concluded (inconclusive); no planner call", status: "info", data: {} });
-            await this.append(sessionId, (s) =>
-              s.session.ended || !this.turnLimitDue(s)
-                ? {}
-                : {
-                    events: [this.serverEvent(s, "turn_limit_reached", null)],
-                    closeRequestIds: s.requests.filter((r) => r.status === "open").map((r) => r.id),
-                    stage: "ended",
-                    outcome: "inconclusive",
-                    ended: true,
-                  },
-            );
+            await this.backend.concludeTurnLimit(sessionId);
             continue;
           }
           this.traceEligibility(snapshot);
@@ -686,10 +545,10 @@ export class ObserverService {
           if (result !== "committed") break;
         }
       } finally {
-        await this.options.store.release(sessionId, claimId);
+        await this.backend.release(sessionId, claimId);
       }
       // Work that arrived while we held the claim: its submitter saw "queued" and relies on this re-check.
-      const after = await this.options.store.load(sessionId);
+      const after = await this.backend.load(sessionId);
       if (!after || !this.hasWork(after)) break;
     }
     return { status: assessed + stale > 0 ? "processed" : "idle", assessed, stale };

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { Evidence, IssueRecord } from "@/contracts/observer";
 import {
   ForbiddenClaimCodeSchema,
@@ -15,6 +14,7 @@ import {
 } from "@/contracts/planner";
 import { normalizeForScan } from "@/server/observer/flags";
 import type { PlanningContext } from "./context";
+import { stableHash64 } from "./hash";
 
 /**
  * Candidate generation (planner brief §6). Pure and deterministic: ordered global rules decide WHICH moves
@@ -67,8 +67,7 @@ const evidenceKey = (refs: readonly EvidenceRef[]) =>
     .join("|");
 
 export function candidateId(revision: number, d: Pick<Draft, "moveId" | "requestId" | "issueId"> & { focus: FocusCode }): string {
-  const h = createHash("sha256").update(`${revision}|${d.moveId}|${d.requestId ?? "-"}|${d.issueId ?? "-"}|${d.focus}`).digest("hex");
-  return `c_${h.slice(0, 16)}`;
+  return `c_${stableHash64(`${revision}|${d.moveId}|${d.requestId ?? "-"}|${d.issueId ?? "-"}|${d.focus}`)}`;
 }
 
 function build(ctx: PlanningContext, d: Draft): Candidate {

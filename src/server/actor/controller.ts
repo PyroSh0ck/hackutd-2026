@@ -1,6 +1,7 @@
 import "server-only";
 import type { Candidate, PlanRecord } from "@/contracts/planner";
-import type { ObserverStore, Snapshot } from "@/server/observer/store/types";
+import type { TrainingBackend } from "@/server/engine/backend";
+import type { Snapshot } from "@/server/observer/store/types";
 import { derivePlanningContext } from "@/server/planner/context";
 import { getEligibleCandidates, POLICY_VERSION } from "@/server/planner/eligibility";
 import { additionsFor, type ScenarioDefinition } from "@/server/planner/scenario";
@@ -127,7 +128,8 @@ export function actorAudit(processingAttemptId: string, processingAttempt: 1 | 2
 }
 
 export type PortDeps = {
-  store: ObserverStore;
+  /** The authoritative backend; it builds and applies the commit (message, request, events) itself. */
+  backend: TrainingBackend;
   sessionId: string;
   claimId: string;
   now: () => Date;
@@ -141,7 +143,7 @@ export class StoreActorCommitPort implements ActorCommitPort {
   constructor(private readonly d: PortDeps) {}
 
   private async snapshot() {
-    const s = await this.d.store.load(this.d.sessionId);
+    const s = await this.d.backend.load(this.d.sessionId);
     if (!s) throw new Error("Session disappeared.");
     return s;
   }
@@ -165,34 +167,15 @@ export class StoreActorCommitPort implements ActorCommitPort {
   async commitValidated(response: PreparedActorResponse) {
     const s = await this.snapshot();
     if (s.session.ownerKey !== response.envelope.ownerKey || !this.d.scenario.request) return { kind: "stale" as const };
-    const revision = this.d.record.basedOnRevision + 1;
-    const at = this.d.now().toISOString();
-    const message = { id: this.d.newId(), sessionId: s.session.id, turn: s.session.turn, role: "assistant" as const, content: response.output.text, createdAt: at, revision };
-    const requests =
-      this.d.candidate.toolIntent === "present_practice_code_request"
-        ? [{ id: this.d.newId(), introducedByMessageId: message.id, targetAction: this.d.scenario.request.targetAction, description: this.d.scenario.request.description, status: "open" as const, revision }]
-        : [];
-    const events = requests.map((r) => ({ id: this.d.newId(), sessionId: s.session.id, requestId: r.id, turn: s.session.turn, type: "request_presented" as const, challengeId: null, detail: "planner", createdAt: at, revision }));
-    const attempts = response.attempts.map((a) => (a.status === "valid" ? { ...a, committedMessageId: message.id } : a));
-    const introduced = new Set(s.additions.filter((a) => a.introducedMessageId !== null).map((a) => a.id));
     const record: PlanRecord = {
       ...this.d.record,
-      status: "committed",
-      committedMessageId: message.id,
       actorOutput: response.output,
-      actorAudit: actorAudit(response.envelope.processingAttemptId, response.envelope.processingAttempt, attempts, response.styleMetrics),
+      actorAudit: actorAudit(response.envelope.processingAttemptId, response.envelope.processingAttempt, response.attempts, response.styleMetrics),
     };
-    const result = await this.d.store.commitPlan({
-      record,
-      claimId: this.d.claimId,
-      now: this.d.now(),
-      message,
-      requests,
-      events,
-      addressIssueId: this.d.candidate.issueId,
-      introduceAdditionIds: response.output.introducedAdditionIds.filter((id) => !introduced.has(id)),
-    });
-    if (result === "committed") return { kind: "committed" as const, messageId: message.id, text: message.content };
+    // The backend rebuilds the commit from its own snapshot and the server-built candidate (shared rules).
+    const { kind: result, messageId } = await this.d.backend.commitPrepared(this.d.sessionId, record, this.d.claimId);
+    const message = { id: messageId ?? "", content: response.output.text };
+    if (result === "committed" && messageId) return { kind: "committed" as const, messageId: message.id, text: message.content };
     if (result === "duplicate") {
       const existing = await this.findCommitted(response.envelope);
       return existing ? { kind: "duplicate" as const, ...existing } : { kind: "stale" as const };

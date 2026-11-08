@@ -1,4 +1,3 @@
-import { randomInt } from "node:crypto";
 import { SCENARIO_ID, SCENARIO_VERSION, type AdditionId, type PlannerAddition, type PlannerFact } from "@/contracts/planner";
 import type { TargetAction } from "@/contracts/observer";
 
@@ -21,8 +20,11 @@ export type ScenarioDefinition = {
   /** F06. Shown only in the trusted verification interface and debrief. Never given to planner or actor. */
   officialResult: string | null;
   officialResultCode: string | null;
-  /** Server secrets/reservations generated at session creation. */
-  reserve: () => { practiceCode: string | null; caseReference: string | null };
+  /**
+   * Server secrets/reservations generated at session creation. `random` returns a value in [0, 1); the
+   * SpacetimeDB module passes its deterministic `ctx.random`, Node passes a CSPRNG-backed source.
+   */
+  reserve: (random?: () => number) => { practiceCode: string | null; caseReference: string | null };
   maxUserTurns: number;
 };
 
@@ -40,7 +42,9 @@ export const FACTS: readonly PlannerFact[] = [
 
 export const OFFICIAL_RESULT = "Official simulated Cedar Mobile support: this conversation was not initiated by Cedar Mobile, and the practice code should not be shared.";
 
-const sixDigits = () => String(randomInt(0, 1_000_000)).padStart(6, "0");
+/** CSPRNG-backed [0, 1) via Web Crypto (available in Node and browsers; no `node:` import, so module-safe). */
+export const secureRandom = () => globalThis.crypto.getRandomValues(new Uint32Array(1))[0] / 2 ** 32;
+const sixDigits = (random: () => number) => String(Math.floor(random() * 1_000_000)).padStart(6, "0");
 
 export const MOBILE_CODE_SCENARIO: ScenarioDefinition = {
   id: SCENARIO_ID,
@@ -52,10 +56,10 @@ export const MOBILE_CODE_SCENARIO: ScenarioDefinition = {
   request: { targetAction: "share_fictional_code", description: "Share the fictional practice code through the simulator's request card." },
   officialResult: OFFICIAL_RESULT,
   officialResultCode: "not_initiated_by_provider",
-  reserve: () => {
-    const practiceCode = sixDigits();
-    let reference = sixDigits();
-    while (reference === practiceCode) reference = sixDigits();
+  reserve: (random = secureRandom) => {
+    const practiceCode = sixDigits(random);
+    let reference = sixDigits(random);
+    while (reference === practiceCode) reference = sixDigits(random);
     return { practiceCode, caseReference: `CD-${reference}` };
   },
   maxUserTurns: MAX_USER_TURNS,
