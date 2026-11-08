@@ -3,6 +3,8 @@ import "server-only";
 import { ObserverIdSchema } from "@/contracts/observer";
 import { NotFoundError } from "@/server/http/errors";
 import { actorModelFromEnv } from "@/server/actor/model";
+import type { TrainingBackend } from "@/server/engine/backend";
+import { SpacetimeBackend, spacetimeConfigFromEnv } from "@/server/engine/spacetime-backend";
 import { FixtureActorModel, FixturePlannerModel } from "@/server/planner/testing/fixture-models";
 import { plannerModels, readObserverModelConfig, readPlannerModelConfig, structuredModels } from "./model";
 import { ObserverService } from "./service";
@@ -15,13 +17,26 @@ let service: ObserverService | undefined;
 /** True only for the Playwright test server: both flags must be set. Never in production. */
 export const fixtureModelsEnabled = () => process.env.E2E_TEST === "1" && process.env.OBSERVER_MODEL_MODE === "fixture";
 
-/** Process-wide service: Postgres store + structured models from server-only env. */
+/**
+ * Authoritative training backend. TRAINING_BACKEND=spacetime makes the SpacetimeDB module the single
+ * authority for training state; it is never silently replaced by Postgres when unconfigured.
+ */
+export function trainingBackendFromEnv(): { backend?: TrainingBackend; store?: PrismaObserverStore } {
+  if (process.env.TRAINING_BACKEND === "spacetime") {
+    const config = spacetimeConfigFromEnv();
+    if (!config) throw new Error("TRAINING_BACKEND=spacetime but SpacetimeDB is not configured (run pnpm spacetime:setup or set SPACETIME_URL/SPACETIME_DATABASE/SPACETIME_TOKEN).");
+    return { backend: new SpacetimeBackend(config) };
+  }
+  return { store: new PrismaObserverStore() };
+}
+
+/** Process-wide service: the configured training backend + structured models from server-only env. */
 export function observerService(): ObserverService {
   if (!service) {
     const config = readObserverModelConfig();
     const planning = readPlannerModelConfig();
     service = new ObserverService({
-      store: new PrismaObserverStore(),
+      ...trainingBackendFromEnv(),
       models: () =>
         fixtureModelsEnabled()
           ? { observer: new FixtureStructuredModel("fixture-observer"), reviewer: new FixtureStructuredModel("fixture-reviewer") }

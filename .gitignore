@@ -54,3 +54,7 @@ next-env.d.ts
 # Trials
 .env.trial.local
 .claude/guard-allow.local
+
+# SpacetimeDB worker credentials written by pnpm spacetime:setup
+.spacetime/
+spacetime/dist/

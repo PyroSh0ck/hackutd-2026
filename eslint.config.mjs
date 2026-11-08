@@ -14,6 +14,8 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Tool output (Playwright reports after a failed run, generated Prisma client).
     "playwright-report/**",
+    // SpacetimeDB module build output.
+    "spacetime/dist/**",
     "test-results/**",
     "src/generated/**",
   ]),

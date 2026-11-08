@@ -1,0 +1,9 @@
+{
+  "name": "scamper-training-engine",
+  "private": true,
+  "description": "SCAMPER's authoritative SpacetimeDB module. Dependencies resolve from the repository root (spacetimedb 2.14.1, zod).",
+  "scripts": {
+    "build": "spacetime build",
+    "publish": "spacetime publish"
+  }
+}

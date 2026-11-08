@@ -1,6 +1,7 @@
 import type { AssessmentRecord, ObserverSessionView, SubmitEventRequest } from "@/contracts/observer";
 import type { PlanRecord } from "@/contracts/planner";
-import { triggerOf } from "@/server/planner/context";
+import { derivePlanningContext, triggerOf } from "@/server/planner/context";
+import { getEligibleCandidates } from "@/server/planner/eligibility";
 import { TEAM_LABEL, type ScenarioDefinition } from "@/server/planner/scenario";
 import { stopIntent, type StopIntent } from "@/server/planner/stop-intent";
 import { eventChange, issueChangesFor, pendingWork, planEvent, stopConfirmationPending } from "@/server/observer/state";
@@ -160,13 +161,29 @@ export const decideIssues = (s: Snapshot, record: AssessmentRecord, newId: () =>
 // ---------------------------------------------------------------------------------------------- commit
 
 /**
+ * The candidate a commit may execute: recomputed from the authoritative snapshot (never taken from the
+ * caller's record), and only if the plan was made against this exact revision for the current input.
+ */
+export function authorizedCandidate(s: Snapshot, record: PlanRecord, scenario: ScenarioDefinition) {
+  if (!record.acceptedPlan || record.basedOnRevision !== s.session.revision) return null;
+  const trigger = triggerOf(s);
+  if (!trigger || trigger.id !== record.inputId) return null;
+  const eligibility = getEligibleCandidates(derivePlanningContext(s, scenario.maxUserTurns));
+  if (eligibility.kind !== "candidates") return null;
+  return eligibility.candidates.find((c) => c.id === record.acceptedPlan!.candidateId) ?? null;
+}
+
+/**
  * Builds the atomic commit for a prepared plan: the actor message, the authorized request (only when the
  * server-built candidate carries the request tool) and its presentation event, the addressed issue, and
  * newly introduced additions. Returns null when the record cannot be committed (no candidate/output).
  */
 export function decideCommit(s: Snapshot, record: PlanRecord, claimId: string, env: Env): PlanCommit | null {
-  const candidate = record.candidateSnapshot.find((c) => c.id === record.acceptedPlan?.candidateId);
+  const candidate = authorizedCandidate(s, record, env.scenario);
   if (!candidate || !record.actorOutput || !env.scenario.request) return null;
+  // Server-held truth never leaves through the opponent's message, whatever the worker sent.
+  const text = record.actorOutput.text;
+  if ((s.session.practiceCode && text.includes(s.session.practiceCode)) || (env.scenario.officialResult && text.includes(env.scenario.officialResult))) return null;
   const revision = record.basedOnRevision + 1;
   const at = env.now.toISOString();
   const message: MessageRow = { id: env.newId(), sessionId: s.session.id, turn: s.session.turn, role: "assistant", content: record.actorOutput.text, createdAt: at, revision };

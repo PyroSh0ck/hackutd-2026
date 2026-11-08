@@ -22,7 +22,12 @@
     "verify": "pnpm check && pnpm test:integration",
     "game:smoke": "tsx --conditions=react-server scripts/game-smoke.ts",
     "observer:eval": "tsx --conditions=react-server scripts/observer-eval.ts",
-    "planner:eval": "tsx --conditions=react-server scripts/planner-eval.ts"
+    "planner:eval": "tsx --conditions=react-server scripts/planner-eval.ts",
+    "spacetime:start": "spacetime start --listen-addr 127.0.0.1:3300 --non-interactive",
+    "spacetime:publish": "spacetime publish scamper-training --server stdb-local --module-path ./spacetime --yes",
+    "spacetime:setup": "tsx scripts/spacetime-setup.ts",
+    "spacetime:typecheck": "tsc --noEmit -p spacetime/tsconfig.json",
+    "test:spacetime": "vitest run --config vitest.spacetime.config.mts"
   },
   "dependencies": {
     "@better-auth/prisma-adapter": "1.7.15",
@@ -39,6 +44,7 @@
     "react-dom": "19.3.0",
     "react-hook-form": "^7.91.0",
     "server-only": "^0.0.1",
+    "spacetimedb": "2.14.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {
