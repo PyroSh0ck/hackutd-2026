@@ -1,106 +1,148 @@
-# Cyber Sleuth: scam-defense practice with SpacetimeDB + NVIDIA Nemotron
+# Cyber Sleuth
 
-Cyber Sleuth (internal code name SCAMPER; routes, ids and the database keep that name) is a consent-based,
-clearly fictional practice simulator. A player chats with a simulated sender
-(Nemotron), decides whom to trust, can check with "official support" through the app, and gets a review
-of what they did. Two scenarios exist:
-- `mobile-code-01`: a fraudulent "account security check" that asks for a fictional practice code;
-- `mobile-notice-01`: a genuine monthly-statement notice, checked through a trusted account portal.
+Cyber Sleuth is a scam-awareness practice app. Players chat with an AI-controlled sender, practice asking questions and checking claims, and decide whether to act, disengage, or report. The exercise is clearly labeled as fictional; all codes and account details are simulated.
 
-The player-facing app is at **`/scamper`**.
+The main experience is at **`/scamper`**. The app currently includes two scenarios:
 
-## Architecture
+- **`mobile-code-01`**: a fictional support agent asks for a one-time practice code. Players can check the claim through the app’s official-support flow before deciding what to do.
+- **`mobile-notice-01`**: a genuine fictional statement notice that can be checked against a trusted in-app account portal.
 
-| Component | Responsibility |
+## Product flow
+
+1. Start a practice session and chat with the sender.
+2. Ask who they are, what they need, or how the request works. The sender responds within the facts permitted for the selected scenario.
+3. Use the in-app official-support check to review the authoritative result. The sender cannot see that hidden result.
+4. If a simulated request appears, choose through its request card. Typing acceptance in chat does not submit anything.
+5. End or report the conversation, then review the transcript, evidence, outcome, and a summary of which system components ran.
+
+If a model turn fails, the app preserves the player’s message and offers a bounded retry. Ending a session prevents a late model response from reviving it.
+
+## How it works
+
+The agents have separate responsibilities, while server rules control what can happen:
+
+| Part | Responsibility |
 | --- | --- |
-| `spacetime/` (SpacetimeDB 2.14.1 TypeScript module) | **Authoritative training engine.** Private tables for sessions, messages, requests, events, assessments, agent turns (claims and plan audit), issues, idempotency receipts, outcomes and per-owner progress. Every mutation runs the shared rules in `src/server/engine/` inside one transaction. |
-| `src/server/engine/` | The training rules as pure code (`decide.ts`, `ops.ts`, `commands.ts`), with no Node imports. The module and the Postgres path run the same code. |
-| Next.js (`src/server/observer/service.ts`) | Orchestration: **observer → eligible moves → planner → actor**. It sends commands to a `TrainingBackend`. With `TRAINING_BACKEND=spacetime` it never decides a state transition itself, and there is no Postgres fallback. |
-| Observer (Nemotron, structured output) | Interprets each player message with quoted evidence (decision, open questions, verification behaviour). Validated deterministically; one bounded repair; falls back to "unclear" on failure. |
-| Planner (Nemotron, `PLANNER_PROTOCOL=tools`) | A function-calling agent with two tools backed by the training service:<br>• `get_training_context` re-reads the authoritative session (server-computed candidate moves and permitted facts; no hidden truth).<br>• `execute_training_move` validates the plan, runs the constrained actor, and calls the module's atomic `commit_agent_turn`.<br>At most 3 model calls. |
-| Actor (Nemotron, structured output) | Writes the sender's message from the accepted plan, under deterministic content rules (no credential, payment, threat or new sensitive-data requests). One repair. |
-| Module commit guard | Rechecks the claim, revision, current input and the **server-derived** eligible move, and refuses output containing the practice code or the official result. |
+| Observer | Interprets the latest player message and cites supporting text. A reviewer checks selected uncertain or consequential interpretations. |
+| Eligibility rules | Produce the moves permitted by the current scenario and authoritative session state. |
+| Planner | Selects one permitted move. In tool mode it reads current training context and asks the server to execute the move. |
+| Actor | Writes the sender’s next message using only the selected move’s allowed facts. Deterministic checks reject prohibited content and invalid output. |
+| Training engine | Rechecks the session revision, turn claim, current input, and eligible move before committing a reply or simulated request. |
 
-The browser never talks to SpacetimeDB directly. Server routes use a restricted **worker** identity whose
-token stays server-side. Player identity is an anonymous signed `httpOnly` cookie.
+`spacetime/` is the authoritative SpacetimeDB module. The same pure transition rules live in `src/server/engine/` and are shared with the local store backend. The browser communicates only with Next.js routes; worker credentials and model keys stay on the server. Player sessions use anonymous, signed `httpOnly` cookies.
 
-## Run locally (live models)
+## Requirements
 
-1. **Model access:** in `.env.local` set `MODEL_BASE_URL=https://integrate.api.nvidia.com/v1`, `MODEL_API_KEY` (a build.nvidia.com key, `nvapi-…`; a Brev `bak-…` key does not work with this endpoint), and `MODEL_ID` (we use `nvidia/nemotron-3.5-bolt-e4b`).
-2. **SpacetimeDB:** pick one target.
-   - **Local server:**
-     ```bash
-     curl -sSf https://install.spacetimedb.com | sh   # spacetime CLI 2.14.1 into ~/.local/bin
-     pnpm spacetime:start                             # 127.0.0.1:3300 (keep running)
-     spacetime server add stdb-local --url http://127.0.0.1:3300
-     pnpm spacetime:publish                           # publishes the module as scamper-training
-     pnpm spacetime:setup                             # authorizes a worker → .spacetime/worker.json
-     ```
-   - **Maincloud:** after `spacetime login`:
-     ```bash
-     pnpm spacetime:publish:maincloud   # publishes as cybersleuth-db (asks to confirm)
-     pnpm spacetime:setup:maincloud     # authorizes a worker → .spacetime/maincloud.json
-     ```
-     Then either set `SPACETIME_WORKER_FILE=.spacetime/maincloud.json`, or set `SPACETIME_URL`, `SPACETIME_DATABASE` and `SPACETIME_TOKEN` in `.env.local`.
-3. **Start the app:**
-   ```bash
-   TRAINING_BACKEND=spacetime PLANNER_PROTOCOL=tools PRACTICE_SCENARIOS=mobile-code-01 pnpm dev
-   ```
-   Open `/scamper`. `/api/ready` should report `backend: "spacetime"`, `backendReachable: true`, `modelConfigured: true` and `fixtureModels: false`.
+- Node.js 22 or newer
+- pnpm (the repository declares its package manager version in `package.json`)
+- NVIDIA-compatible model API credentials for live agent behavior
+- SpacetimeDB 2.14.1 for the authoritative SpacetimeDB setup
+- PostgreSQL for authentication and the Prisma-backed test/development paths
 
-`PRACTICE_SCENARIOS` takes `mobile-code-01`, `mobile-notice-01`, or both comma-separated (the default is both, randomly mixed).
+## Local development
 
-### Test-model mode (labeled test doubles, not live AI)
+Install dependencies:
 
-`E2E_TEST=1 OBSERVER_MODEL_MODE=fixture pnpm dev` replaces all three agents with deterministic fixtures. Use it for rehearsal and tests only; it must never be presented as live AI.
+```bash
+pnpm install --frozen-lockfile
+```
 
-## Deploy (Vercel)
+Create `.env.local` with the model settings below. Keep it out of Git; `.env*` files are ignored.
 
-Configure these as **server-side** environment variables (never `NEXT_PUBLIC_*`):
+```dotenv
+MODEL_BASE_URL=https://integrate.api.nvidia.com/v1
+MODEL_API_KEY=your-nvidia-api-key
+MODEL_ID=nvidia/nemotron-3.5-bolt-e4b
+```
 
-| Variable | Value |
+### Connect a local SpacetimeDB
+
+Install the SpacetimeDB CLI using the [official installation instructions](https://spacetimedb.com/install). Then run:
+
+```bash
+pnpm spacetime:start
+```
+
+In a second terminal, register the local server, publish the module, and create its worker authorization:
+
+```bash
+spacetime server add stdb-local --url http://127.0.0.1:3300
+pnpm spacetime:publish
+pnpm spacetime:setup
+```
+
+The setup writes a local worker file under `.spacetime/`; that directory is ignored by Git. Start the app with:
+
+```bash
+TRAINING_BACKEND=spacetime \
+PLANNER_PROTOCOL=tools \
+PRACTICE_SCENARIOS=mobile-code-01 \
+pnpm dev
+```
+
+Open `http://localhost:3000/scamper`. Check `http://localhost:3000/api/ready`; for live SpacetimeDB use, it should report a reachable Spacetime backend, configured models, and fixture models disabled.
+
+`PRACTICE_SCENARIOS` accepts `mobile-code-01`, `mobile-notice-01`, or both separated by commas. The default enables both.
+
+### Maincloud
+
+For a shared SpacetimeDB deployment, authenticate with the CLI and run:
+
+```bash
+pnpm spacetime:publish:maincloud
+pnpm spacetime:setup:maincloud
+```
+
+Set `SPACETIME_WORKER_FILE=.spacetime/maincloud.json`, or configure `SPACETIME_URL`, `SPACETIME_DATABASE`, and `SPACETIME_TOKEN` in the server environment. Publishing changes the shared module; use the local server workflow for isolated development.
+
+### Fixture mode
+
+Deterministic fixture agents are useful for UI and integration development, but do not test live model quality:
+
+```bash
+E2E_TEST=1 OBSERVER_MODEL_MODE=fixture pnpm dev
+```
+
+## Tests and diagnostics
+
+| Command | Purpose |
 | --- | --- |
-| `TRAINING_BACKEND` | `spacetime` |
-| `PLANNER_PROTOCOL` | `tools` |
-| `SPACETIME_URL` | `https://maincloud.spacetimedb.com` |
-| `SPACETIME_DATABASE` | `cybersleuth-db` |
-| `SPACETIME_TOKEN` | the authorized worker token (`token` in `.spacetime/maincloud.json`) |
-| `MODEL_BASE_URL` | `https://integrate.api.nvidia.com/v1` |
-| `MODEL_API_KEY` | NVIDIA API key (`nvapi-…`) |
-| `MODEL_ID` | `nvidia/nemotron-3.5-bolt-e4b` |
-| `DATABASE_URL` | Postgres URL (auth tables, Prisma) |
-| `BETTER_AUTH_SECRET` | stable 32+ character secret (also signs the player cookie unless `GAME_COOKIE_SECRET` is set) |
-| `BETTER_AUTH_URL` | the deployment's public origin, e.g. `https://<project>.vercel.app` |
-| `PRACTICE_SCENARIOS` | `mobile-code-01` (recommended for judging; see limits) |
+| `pnpm check` | Lint, typecheck, and unit/component tests. |
+| `pnpm test:integration` | API and browser integration suite. Requires the test database configuration. |
+| `pnpm test:spacetime` | Engine tests against a running SpacetimeDB server. |
+| `pnpm practice:smoke` | One live-model pipeline check using the configured backend. |
+| `pnpm practice:skeptical` | Live-model checks for refusal, proof challenges, backing off, and the cooperative code-request path. Uses an isolated in-memory store. |
+| `LIVE_BASE_URL=http://localhost:3000 pnpm test:live` | Opt-in browser tests against an already running server with real models. Set `LIVE_SCENARIO=notice` for the legitimate notice scenario. |
 
-- **Leave unset:** `E2E_TEST`, `OBSERVER_MODEL_MODE`, `AGENT_DEBUG`, `PRACTICE_ALLOW_SCENARIO_SELECTION`.
-- **Duration:** `vercel.json` gives the observer routes a 300 s maximum duration. A typical turn takes 6–12 s, but the bounded worst case (observer + planner + actor timeouts and repairs) is well above typical serverless defaults.
-- **Keep secrets stable:** changing `BETTER_AUTH_SECRET` / `GAME_COOKIE_SECRET` resets every anonymous player's ownership.
+Live model results vary with provider availability and latency. These checks measure specific runs; they cannot guarantee every model response. The review page’s **How this session worked** panel shows the backend, models, observer decisions, planner tool calls, and session outcome without exposing model reasoning.
 
-## Checks
+## Deployment
 
-| Command | What it proves |
-| --- | --- |
-| `pnpm check` | Lint, typecheck, unit/component tests (fixture models). |
-| `pnpm test:integration` | All API and browser tests on a production build (Postgres, fixture models). |
-| `pnpm test:spacetime` | Against a live SpacetimeDB server: full flow, exposure only via the explicit request action, idempotency, commit guards, stop race, unauthorized identities. |
-| `TRAINING_BACKEND=spacetime PLANNER_PROTOCOL=tools pnpm exec playwright test tests/e2e/scamper.spec.ts tests/e2e/scamper-notice.spec.ts` | The browser flows with the module as authority (fixture models). |
-| `pnpm practice:smoke` | **Live** model smoke: observer evidence, planner tool calls with provider call ids, a committed reply, terminal stop. |
-| `LIVE_BASE_URL=http://localhost:3000 pnpm test:live` | **Live** browser checks against a running server with real models (refuses fixture mode). Add `LIVE_SCENARIO=notice` for a server running `mobile-notice-01`. Results go to `tmp/live-results/`. |
+The app can be hosted on Vercel. Configure secrets as server-only environment variables; never use `NEXT_PUBLIC_` for credentials. Typical settings include:
 
-After a session ends, the review page's **How this session worked** panel shows the backend, models,
-observer decisions, planner protocol, tool calls with their call ids, and the outcome.
+```text
+TRAINING_BACKEND=spacetime
+PLANNER_PROTOCOL=tools
+SPACETIME_URL=https://maincloud.spacetimedb.com
+SPACETIME_DATABASE=your-database-name
+SPACETIME_TOKEN=authorized-worker-token
+MODEL_BASE_URL=https://integrate.api.nvidia.com/v1
+MODEL_API_KEY=your-nvidia-api-key
+MODEL_ID=nvidia/nemotron-3.5-bolt-e4b
+DATABASE_URL=postgresql://...
+BETTER_AUTH_SECRET=a-stable-secret-at-least-32-characters-long
+BETTER_AUTH_URL=https://your-deployment.example
+PRACTICE_SCENARIOS=mobile-code-01
+```
 
-## Live results and known limits (2026-11-08)
+Configure any optional model IDs, observer policy, and database settings required by your deployment. Keep `E2E_TEST`, `OBSERVER_MODEL_MODE`, and `AGENT_DEBUG` unset in production. Use a stable auth secret; rotating it invalidates existing anonymous session cookies.
 
-- **Live runs:** with `nemotron-3.5-bolt-e4b` on Maincloud, live browser sessions passed. Details, per-session numbers and the fixes made along the way are in `docs/agents/DEMO-READINESS.md`.
-  - Fraud flows: verification, simulated exposure, stop mid-generation.
-  - Legitimate notice: verified and declined endings.
-- **The sample is small.** The request typically appears after 2–5 player turns; turns take about 6–12 s, mostly the observer. Hosted-model latency and rate limits vary; a failed turn shows a **Retry reply** control.
-- **Legitimate scenario replies are functional but weak** (e.g. "I don't have that detail."), which is why `mobile-code-01` alone is recommended for judging.
-- **Notice scenario gaps:** "What is this about?" can still get "I don't have that detail." (the topic gate is in the shared engine and needs a module republish to change).
-- **Chat behaviour (2026-11-08 fixes):** the player's message appears immediately; the reply is generated after the message is saved (`respond: "after_save"`) and the page follows the server's `turnStatus` (generating / paused with a reason / failed), including after a reload. The opponent stays in character (app controls and the simulation framing live in the app chrome only).
-- **Other limits:**
-  - History is per anonymous cookie; it is not cross-device.
-  - The legacy `/practice` page has no account portal.
-  - Eval labels have not had human review.
+## Known limitations
+
+- AI responses and latency vary; live checks do not establish a guaranteed success rate.
+- The skeptical-path smoke test exercises the real models with an isolated in-memory store. It does not verify a deployed SpacetimeDB module.
+- Session history belongs to the browser’s anonymous cookie and does not transfer across devices.
+- The legitimate notice scenario has narrower reply facts and may produce less detailed answers than the code-request scenario.
+- Evaluation labels and automated scenario checks still need ongoing human review.
+
+For the project brief, current backend status, and demo evidence, see [`docs/agents/DEMO-READINESS.md`](docs/agents/DEMO-READINESS.md) and [`handoff.md`](handoff.md).
