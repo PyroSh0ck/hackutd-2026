@@ -58,3 +58,4 @@ next-env.d.ts
 # SpacetimeDB worker credentials written by pnpm spacetime:setup
 .spacetime/
 spacetime/dist/
+tmp/

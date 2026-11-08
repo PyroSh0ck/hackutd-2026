@@ -27,7 +27,8 @@
     "spacetime:publish": "spacetime publish scamper-training --server stdb-local --module-path ./spacetime --yes",
     "spacetime:setup": "tsx scripts/spacetime-setup.ts",
     "spacetime:typecheck": "tsc --noEmit -p spacetime/tsconfig.json",
-    "test:spacetime": "vitest run --config vitest.spacetime.config.mts"
+    "test:spacetime": "vitest run --config vitest.spacetime.config.mts",
+    "practice:smoke": "tsx --conditions=react-server scripts/practice-smoke.ts"
   },
   "dependencies": {
     "@better-auth/prisma-adapter": "1.7.15",
