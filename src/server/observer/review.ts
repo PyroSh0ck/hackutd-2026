@@ -10,6 +10,7 @@ import {
 } from "@/contracts/observer";
 import { checkEvidence, contextFor, validateCandidate, zodIssuesToErrors } from "./evidence";
 import { contradictionFlags, isSemanticFlag } from "./flags";
+import { collapseDuplicateIssues } from "./issue-support";
 
 /**
  * Reviewer validation and resolution (brief §4.7). A supported review is corroboration, not ground truth:
@@ -27,7 +28,10 @@ function indexIn(field: string, a: ObserverAssessment): boolean {
 }
 
 export function validateReview(raw: unknown, input: ObserverInput, proposed: ObserverAssessment): ReviewValidation {
-  const parsed = ReviewerResponseSchema.safeParse(raw);
+  const normalized = raw && typeof raw === "object" && "correctedAssessment" in raw
+    ? { ...raw, correctedAssessment: collapseDuplicateIssues((raw as { correctedAssessment?: unknown }).correctedAssessment) }
+    : raw;
+  const parsed = ReviewerResponseSchema.safeParse(normalized);
   if (!parsed.success) return { response: null, errors: zodIssuesToErrors(parsed.error) };
   const response = parsed.data;
   const ctx = contextFor(input);

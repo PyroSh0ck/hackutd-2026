@@ -105,7 +105,15 @@ export function policyFlags(a: ObserverAssessment, policy: ReviewPolicy): Review
 }
 
 export function reviewFlags(a: ObserverAssessment, input: ObserverInput, policy: ReviewPolicy): ReviewFlag[] {
-  return [...contradictionFlags(a, input), ...policyFlags(a, policy)];
+  const overlapping = new Set<string>();
+  a.openIssues.forEach((issue, i) => {
+    for (const other of a.openIssues.slice(i + 1)) {
+      if (issue.kind === other.kind) continue;
+      for (const e of issue.evidence) if (other.evidence.some((o) => o.messageId === e.messageId && (o.quote.includes(e.quote) || e.quote.includes(o.quote)))) overlapping.add(e.messageId);
+    }
+  });
+  const issueFlags: ReviewFlag[] = overlapping.size ? [{ field: "openIssues", code: "conflicting_evidence", messageIds: [...overlapping], matchedText: null, detail: "Overlapping evidence was assigned different issue kinds. Review whether these are distinct questions or redundant interpretations. A question is not an ambiguous decision merely because it does not accept or refuse. Retain all genuinely distinct questions." }] : [];
+  return [...contradictionFlags(a, input), ...issueFlags, ...policyFlags(a, policy)];
 }
 
 export const isSemanticFlag = (f: ReviewFlag) => f.code !== "consequential_classification";

@@ -43,6 +43,13 @@ describe("Stage 4: actor instruction builder", async () => {
       ["continue_premise", "none"],
     ]);
   });
+
+  it("procedure instructions retain the requested action even when the planner selects only its duration", () => {
+    const candidate = { ...identity.input.candidates[0], moveId: "answer_procedure" as const, constraints: { ...identity.input.candidates[0].constraints, allowedFactIds: ["F04", "F05"] as const } };
+    const input = { ...identity.input, candidates: [{ ...candidate, constraints: { ...candidate.constraints, allowedFactIds: [...candidate.constraints.allowedFactIds] } }] };
+    const i = instructionFor(input, 0, { selectedFactIds: ["F05"] });
+    expect(i.facts.map((f) => f.id)).toContain("F04");
+  });
 });
 
 describe("Actor v2 controller assembly (src/server/actor/controller.ts)", async () => {

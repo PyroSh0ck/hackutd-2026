@@ -46,6 +46,11 @@ export function validateActorOutput(raw: unknown, input: ActorInput, ctx: ActorV
   const out = parsed.data;
   const text = out.text;
   const i = input.instruction;
+  // A request presentation must ask for the code, not merely create a card next to an acknowledgment.
+  // Reuse the existing demand recognizer and its negation handling; this is not semantic proof.
+  if (i.toolIntent === "present_practice_code_request" && !contentViolations(text, { allowCodeRequest: false }).some((v) => v.ruleId === "CR2_code_request")) {
+    add("prohibited_content", "text", "CR8_missing_request: ask the user to share the six-digit code; acknowledgment or procedure description alone does not fulfill this move.");
+  }
   if (!text.trim()) add("blank_text", "text", "Text must not be blank.");
   if (wordCount(text) > hardWordLimit(i)) add("word_limit", "text", "Text exceeds the binding word limit.");
   if (questionCount(text) > Math.min(1, i.constraints.maxQuestions)) add("question_limit", "text", "Text exceeds the binding question limit.");
@@ -82,7 +87,11 @@ export function validateActorOutput(raw: unknown, input: ActorInput, ctx: ActorV
   // through the same single repair as any other violation (no extra generation loop). Short acknowledgments
   // ("Understood.") may legitimately recur, so only replies of six or more words count.
   const comparable = (t: string) => t.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-  if (comparable(text).split(" ").length >= 6 && input.recentActorMessages.some((m) => comparable(m.text) === comparable(text))) violations.push({ code: "prohibited_content", field: "text", detail: "CR7_repeated_reply", offendingExcerpt: text.slice(0, 120) });
+  const latestUser = [...input.contextMessages].reverse().find((m) => m.role === "user")?.text ?? "";
+  const repeatedHonestLimit = (i.moveId === "address_doubt" || i.moveId === "answer_identity")
+    && /\b(?:prove|proof|how do i know|really from|actually from|liar|lying)\b/i.test(latestUser)
+    && /\b(?:can'?t|cannot|doesn'?t|does not)\s+(?:prove|confirm|establish)\b/i.test(text);
+  if (!repeatedHonestLimit && comparable(text).split(" ").length >= 6 && input.recentActorMessages.some((m) => comparable(m.text) === comparable(text))) violations.push({ code: "prohibited_content", field: "text", detail: "CR7_repeated_reply", offendingExcerpt: text.slice(0, 120) });
   violations.push(...gateViolations(ctx.state, i.basedOnRevision));
   return { valid: violations.length === 0, violations, output: violations.length ? null : SharedOutputSchema.parse(out) };
 }

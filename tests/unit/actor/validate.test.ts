@@ -6,6 +6,18 @@ import { input, instruction, output } from "./fixtures";
 const context = () => ({ reserved: [{ id: "case_reference", text: "CD-123456", introduced: false }, { id: "team_label", text: "Account Review", introduced: false }], knownSecrets: ["938201", "test-credential"], state: { stage: "active", ended: false, revision: 20 } } satisfies ActorValidationContext);
 const check = (text: string, i = instruction()) => validateActorOutput(output(text), input(i), context());
 describe("pure actor output validation", () => {
+  it("does not turn a repeated proof challenge into a technical failure when the honest limit is unchanged", () => {
+    const s = { ...input().recentActorMessages[0], text: "This message alone can't prove who I am." };
+    const a = input(instruction({ moveId: "address_doubt", action: "respond_to_objection" }));
+    a.recentActorMessages = [s];
+    a.contextMessages = [{ id: "m1", role: "user", text: "Prove it", turn: 1 }];
+    expect(validateActorOutput(output("This message alone can't prove who I am."), a, context()).valid).toBe(true);
+  });
+  it("a request-presentation move cannot commit an acknowledgment without the request", () => {
+    const i = instruction({ action: "present_simulated_request", moveId: "present_code_request", toolIntent: "present_practice_code_request", focusCode: "present_request" });
+    expect(check("Understood.", i).valid).toBe(false);
+    expect(check("Please share the six-digit code.", i).valid).toBe(true);
+  });
   it("shares whitespace word counts and ASCII/fullwidth question counts", () => {
     expect(wordCount(" \n one\t two　three ")).toBe(3); expect(wordCount(" ")).toBe(0);
     expect(questionCount("One? Two？")).toBe(2);

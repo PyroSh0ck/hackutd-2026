@@ -143,6 +143,15 @@ describe("Stage 2: contradiction flags on the required edge cases", () => {
 });
 
 describe("Stage 2: review policy", () => {
+  it("reviews overlapping issue interpretations without deciding which meaning is correct", () => {
+    const input = inputFor("What do you need from me?");
+    const a = assessment(input, "unclear", null, { openIssues: [
+      { kind: "procedure_question", summary: "Asks what is needed", evidence: [{ messageId: "m-cur", quote: "What do you need from me?" }] },
+      { kind: "decision_needs_clarification", summary: "Decision is ambiguous", evidence: [{ messageId: "m-cur", quote: "What do you need from me?" }] },
+    ] });
+    expect(reviewFlags(a, input, "flagged_only")).toEqual(expect.arrayContaining([expect.objectContaining({ field: "openIssues", code: "conflicting_evidence", messageIds: ["m-cur"] })]));
+    expect(a.openIssues).toHaveLength(2);
+  });
   const input = inputFor("Yes, I'll send the code.");
   it("default policy selects explicit_acceptance and refused, nothing else", () => {
     expect(codesOf(policyFlags(assessment(input, "explicit_acceptance", "Yes"), "consequential_and_flagged"))).toEqual(["consequential_classification"]);
