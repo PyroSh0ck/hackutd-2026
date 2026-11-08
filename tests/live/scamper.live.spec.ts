@@ -85,6 +85,26 @@ async function untilRequest(page: Page, row: Row) {
   throw new Error(`request card never appeared within ${MAX_TURNS} cooperative turns`);
 }
 
+test("isolation: a separate browser context cannot read another anonymous player's session", async ({ browser }) => {
+  const a = await browser.newContext();
+  const b = await browser.newContext();
+  try {
+    expect((await a.request.get("/api/observer/progress")).status()).toBe(200); // establish player A's cookie
+    const created = await a.request.post("/api/observer/sessions", { data: {} });
+    expect(created.status()).toBe(201);
+    const { session } = (await created.json()) as { session: { sessionId: string } };
+    expect((await a.request.get(`/api/observer/sessions/${session.sessionId}`)).status()).toBe(200);
+    expect((await b.request.get(`/api/observer/sessions/${session.sessionId}`)).status()).toBe(404);
+    expect((await b.request.post(`/api/observer/sessions/${session.sessionId}/events`, { data: { idempotencyKey: crypto.randomUUID(), type: "conversation_ended", requestId: null } })).status()).toBe(404);
+    const list = (await (await b.request.get("/api/observer/sessions")).json()) as { sessions: { id: string }[] };
+    expect(list.sessions.map((s) => s.id)).not.toContain(session.sessionId);
+    log("isolation: player B gets 404 for player A's session and does not list it");
+  } finally {
+    await a.close();
+    await b.close();
+  }
+});
+
 test.describe("fraud scenario (mobile-code-01)", () => {
   test.skip(SCENARIO !== "fraud", "LIVE_SCENARIO is not fraud");
   const GREETING = /Cedar Account Support/;
