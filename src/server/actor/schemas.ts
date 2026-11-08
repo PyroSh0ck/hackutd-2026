@@ -21,7 +21,7 @@ export type ActorStyleProfile = z.infer<typeof ActorStyleProfileSchema>;
 export const ActorInputSchema = z.strictObject({
   schemaVersion: z.literal(ACTOR_SCHEMA_VERSION), styleProfile: ActorStyleProfileSchema,
   recentActorMessages: z.array(ActorContextMessageSchema).max(3), instruction: ActorInstructionSchema,
-  persona: z.strictObject({ scenarioId: z.literal("mobile-code-01"), senderName: z.literal("Avery"),
+  persona: z.strictObject({ scenarioId: z.enum(["mobile-code-01", "mobile-notice-01"]), senderName: z.literal("Avery"),
     organization: z.literal("Cedar Account Support"), voice: z.literal("plain_professional") }),
   currentUserMessageId: Id.nullable(), contextMessages: z.array(ActorContextMessageSchema).max(12),
   visibleRequest: z.strictObject({ id: Id, description: z.string().min(1).max(4000), status: z.enum(["pending", "rejected"]) }).nullable(),

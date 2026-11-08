@@ -180,7 +180,7 @@ export function authorizedCandidate(s: Snapshot, record: PlanRecord, scenario: S
  */
 export function decideCommit(s: Snapshot, record: PlanRecord, claimId: string, env: Env): PlanCommit | null {
   const candidate = authorizedCandidate(s, record, env.scenario);
-  if (!candidate || !record.actorOutput || !env.scenario.request) return null;
+  if (!candidate || !record.actorOutput) return null;
   // Server-held truth never leaves through the opponent's message, whatever the worker sent.
   const text = record.actorOutput.text;
   if ((s.session.practiceCode && text.includes(s.session.practiceCode)) || (env.scenario.officialResult && text.includes(env.scenario.officialResult))) return null;
@@ -188,7 +188,7 @@ export function decideCommit(s: Snapshot, record: PlanRecord, claimId: string, e
   const at = env.now.toISOString();
   const message: MessageRow = { id: env.newId(), sessionId: s.session.id, turn: s.session.turn, role: "assistant", content: record.actorOutput.text, createdAt: at, revision };
   const requests: RequestRow[] =
-    candidate.toolIntent === "present_practice_code_request"
+    candidate.toolIntent === "present_practice_code_request" && env.scenario.request
       ? [{ id: env.newId(), introducedByMessageId: message.id, targetAction: env.scenario.request.targetAction, description: env.scenario.request.description, status: "open", revision }]
       : [];
   const events: EventRow[] = requests.map((r) => ({ id: env.newId(), sessionId: s.session.id, requestId: r.id, turn: s.session.turn, type: "request_presented", challengeId: null, detail: "planner", createdAt: at, revision }));

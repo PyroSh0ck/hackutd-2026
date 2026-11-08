@@ -1,5 +1,5 @@
 import { ReferenceCatalogSchema, type PrivateScenario, type ReferenceDirectoryResponse } from "@/contracts/reference";
-import { OFFICIAL_RESULT } from "@/server/planner/scenario";
+import { OFFICIAL_RESULT } from "./canonical";
 
 /**
  * The fictional reference catalog, validated at load. Pure data (no server-only/Node imports) so the

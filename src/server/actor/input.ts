@@ -2,7 +2,7 @@ import type { ActorInstruction } from "@/contracts/planner";
 import { ActorInstructionSchema } from "@/contracts/planner";
 import type { Snapshot } from "@/server/observer/store/types";
 import { requestStatusOf } from "@/server/observer/state";
-import { FACTS } from "@/server/planner/scenario";
+import { scenarioById } from "@/server/planner/scenario";
 import { ActorInputSchema, type ActorInput } from "./schemas";
 import { buildStyleProfile } from "./style";
 
@@ -31,13 +31,14 @@ export function buildActorInput(args: ActorAssemblyInput): ActorInput {
   const { snapshot: s } = args;
   const instruction = ActorInstructionSchema.parse(args.instruction);
   if (s.session.stage !== "active" || s.session.ended || instruction.basedOnRevision !== s.session.revision) throw new Error("Actor input requires an active, current session.");
-  if (s.session.scenarioId !== "mobile-code-01") throw new Error("Unsupported actor scenario.");
+  const scenario = scenarioById(s.session.scenarioId, s.session.scenarioVersion);
+  if (!scenario || (scenario.id !== "mobile-code-01" && scenario.id !== "mobile-notice-01")) throw new Error("Unsupported actor scenario.");
   const secrets = [s.session.practiceCode ?? "", ...(args.knownSecrets ?? [])];
   const factIds = new Set(instruction.facts.map((f) => f.id));
   const additionIds = new Set(instruction.additions.map((a) => a.id));
   if (factIds.size !== instruction.facts.length || additionIds.size !== instruction.additions.length || [...factIds].some((id) => !instruction.constraints.allowedFactIds.includes(id)) || [...additionIds].some((id) => !instruction.constraints.allowedAdditionIds.includes(id))) throw new Error("Instruction references exceed binding constraints.");
   instruction.facts = instruction.facts.map((f) => {
-    const fact = FACTS.find((x) => x.id === f.id);
+    const fact = scenario.facts.find((x) => x.id === f.id);
     if (!fact) throw new Error("Unknown selected fact.");
     return { ...fact };
   });
@@ -79,7 +80,7 @@ export function buildActorInput(args: ActorAssemblyInput): ActorInput {
   if (args.controls.some((c) => c.id === "share_practice_code") && visibleRequest?.status !== "pending" && !mayCreate) throw new Error("Share control requires a pending or authorized new request.");
   return ActorInputSchema.parse(redactModelData({
     schemaVersion: "actor-v2", instruction, styleProfile: buildStyleProfile(instruction),
-    persona: { scenarioId: "mobile-code-01", senderName: "Avery", organization: "Cedar Account Support", voice: "plain_professional" },
+    persona: { scenarioId: scenario.id as "mobile-code-01" | "mobile-notice-01", senderName: "Avery", organization: "Cedar Account Support", voice: "plain_professional" },
     currentUserMessageId: args.currentUserMessageId, contextMessages, recentActorMessages, visibleRequest,
     controls: args.controls.map(({ id, label }) => ({ id, label })),
   }, secrets));

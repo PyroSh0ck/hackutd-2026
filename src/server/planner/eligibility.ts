@@ -71,7 +71,9 @@ export function candidateId(revision: number, d: Pick<Draft, "moveId" | "request
 }
 
 function build(ctx: PlanningContext, d: Draft): Candidate {
-  const move = MOVES[d.moveId];
+  const base = MOVES[d.moveId];
+  // Scenario registry: per-move facts and additions (e.g. the legitimate notice uses L01–L04, no additions).
+  const move = ctx.moves ? { ...base, facts: ctx.moves.facts[d.moveId] ?? [], additions: ctx.moves.additions[d.moveId] ?? [] } : base;
   const focus = d.focus ?? move.focus;
   const refs = [...d.refs, ...(ctx.assessment ? [{ kind: "assessment" as const, id: ctx.assessment.id }] : [])].slice(0, 8);
   return {
@@ -132,6 +134,10 @@ function finish(ctx: PlanningContext, ruleId: string, drafts: Draft[], reason: s
   const kept: Candidate[] = [];
   const seen = new Set<string>();
   for (const d of drafts) {
+    if (ctx.moves && !ctx.moves.allowed.includes(d.moveId)) {
+      excluded.push({ moveId: d.moveId, issueId: d.issueId, reason: "not in this scenario's candidate registry" });
+      continue;
+    }
     const pair = `${d.issueId ?? d.requestId ?? "-"}:${d.moveId}`;
     if (seen.has(pair)) continue; // at most one candidate per issue/move pair
     seen.add(pair);

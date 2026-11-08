@@ -1,10 +1,10 @@
-import { PLAN_LIMITS, PlannerInputSchema, SCENARIO_ID, SCENARIO_VERSION, type Candidate, type PlannerInput } from "@/contracts/planner";
+import { PLAN_LIMITS, PlannerInputSchema, type Candidate, type PlannerInput } from "@/contracts/planner";
 import { plannerObservation, recentPlans } from "@/server/observer/planner-input";
 import { publicMessage } from "@/server/observer/state";
 import type { Snapshot } from "@/server/observer/store/types";
 import type { PlanningContext } from "./context";
 import { POLICY_VERSION } from "./eligibility";
-import { FACTS } from "./scenario";
+import { FACTS, scenarioById } from "./scenario";
 
 /**
  * Planner payload assembly (planner brief §5, §10). Includes the last six messages plus every message cited
@@ -22,14 +22,14 @@ export function buildPlannerInput(s: Snapshot, ctx: PlanningContext, candidates:
   if (relevantMessages.some((m) => m.content.length > PLAN_LIMITS.messageChars)) throw new Error("Message exceeds the ingestion bound.");
   return PlannerInputSchema.parse({
     sessionId: s.session.id,
-    scenarioId: SCENARIO_ID,
-    scenarioVersion: SCENARIO_VERSION,
+    scenarioId: s.session.scenarioId as PlannerInput["scenarioId"],
+    scenarioVersion: s.session.scenarioVersion,
     basedOnRevision: s.session.revision,
     policyVersion: POLICY_VERSION,
     observer,
     relevantMessages,
     candidates,
-    facts: FACTS,
+    facts: [...(scenarioById(s.session.scenarioId, s.session.scenarioVersion)?.facts ?? FACTS)],
     additions: ctx.additions,
     recentPlans: recentPlans(s.plans),
     remainingTurns: Math.max(0, maxUserTurns - ctx.userTurns),

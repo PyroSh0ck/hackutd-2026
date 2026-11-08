@@ -27,7 +27,7 @@ import { runToolPlanningTurn, type MoveResult } from "@/server/planner/tool-run"
 import type { ToolChatModel } from "@/server/planner/tool-model";
 import { StoreBackend, VersionConflictError, type TrainingBackend } from "@/server/engine/backend";
 import { decideIssues, technicalNotice, turnLimitDue, type Rejection } from "@/server/engine/decide";
-import { MOBILE_CODE_SCENARIO, type ScenarioDefinition } from "@/server/planner/scenario";
+import { MOBILE_CODE_SCENARIO, scenarioById, type ScenarioDefinition } from "@/server/planner/scenario";
 import type { StructuredModel } from "./model";
 import { traced, type TraceInput, type TraceSink } from "./trace";
 import { plannerObservation } from "./planner-input";
@@ -138,8 +138,15 @@ export class ObserverService {
     }
   }
 
-  private get planningEnabled() {
-    return Boolean(this.options.planning && this.scenario.request);
+  /** The session's own scenario (stored at creation); the configured default only for unknown legacy ids. */
+  scenarioOf(s: Snapshot): ScenarioDefinition {
+    return scenarioById(s.session.scenarioId, s.session.scenarioVersion, [this.scenario]) ?? this.scenario;
+  }
+
+  /** Opponent replies need planning models and a scenario with something to plan (a request or legitimate moves). */
+  private planningEnabled(s: Snapshot) {
+    const scenario = this.scenarioOf(s);
+    return Boolean(this.options.planning && (scenario.request || scenario.moves));
   }
 
   // ------------------------------------------------------------------ reads
@@ -164,11 +171,11 @@ export class ObserverService {
     return {
       sessionId: s.session.id,
       threadId: s.session.threadId,
-      scenario: { id: s.session.scenarioId, version: s.session.scenarioVersion, senderName: this.scenario.senderName, simulationNotice: this.scenario.simulationNotice },
+      scenario: { id: s.session.scenarioId, version: s.session.scenarioVersion, senderName: this.scenarioOf(s).senderName, simulationNotice: this.scenarioOf(s).simulationNotice },
       revision: s.session.revision,
       conversationRevision: s.session.conversationRevision,
       turn: s.session.turn,
-      maxTurns: this.scenario.maxUserTurns,
+      maxTurns: this.scenarioOf(s).maxUserTurns,
       ended: s.session.ended,
       stage: s.session.stage,
       outcome: s.session.outcome,
@@ -180,7 +187,7 @@ export class ObserverService {
       practiceCode: request && s.session.practiceCode ? s.session.practiceCode : null,
       verification: {
         status: verification.status,
-        officialResult: verification.status === "in_progress" || verification.status === "completed" ? this.scenario.officialResult : null,
+        officialResult: verification.status === "in_progress" || verification.status === "completed" ? this.scenarioOf(s).officialResult : null,
         activeChallengeId: verification.status === "in_progress" && s.session.stage === "verifying" ? verification.activeChallengeId : null,
         attemptId: verification.status === "in_progress" && s.session.stage === "verifying" ? ([...s.events].reverse().find((e) => e.type === "official_verification_started" && e.challengeId === verification.activeChallengeId)?.id ?? null) : null,
       },
@@ -278,7 +285,7 @@ export class ObserverService {
   /** The planner handoff and the current deterministic eligibility (no model call). */
   async planner(ownerKey: string, sessionId: string): Promise<{ observation: PlannerObservation | null; eligibility: Eligibility }> {
     const s = await this.owned(ownerKey, sessionId);
-    return { observation: plannerObservation(s, this.scenario.maxUserTurns), eligibility: getEligibleCandidates(derivePlanningContext(s, this.scenario.maxUserTurns)) };
+    return { observation: plannerObservation(s, this.scenarioOf(s).maxUserTurns), eligibility: getEligibleCandidates(derivePlanningContext(s, this.scenarioOf(s).maxUserTurns)) };
   }
 
   // ------------------------------------------------------------------ writes
@@ -376,12 +383,12 @@ export class ObserverService {
   // ------------------------------------------------------------------ processing
 
   private turnLimitDue(s: Snapshot): boolean {
-    return turnLimitDue(s, this.scenario);
+    return turnLimitDue(s, this.scenarioOf(s));
   }
 
   /** What the planner should do next, if anything. Deterministic; wait/controller results need no record. */
   planningWork(s: Snapshot): PlanningWork | null {
-    if (!this.planningEnabled || s.session.ended || pendingWork(s) || this.turnLimitDue(s)) return null;
+    if (!this.planningEnabled(s) || s.session.ended || pendingWork(s) || this.turnLimitDue(s)) return null;
     const trigger = triggerOf(s);
     if (!trigger) return null;
     if (trigger.kind === "message" && !s.assessments.some((a) => a.application === "applied" && a.currentMessageId === trigger.id)) return null;
@@ -394,20 +401,20 @@ export class ObserverService {
     const failures = records.filter((p) => p.status === "failed" || p.status === "rejected").length;
     if (failures >= 2) return null;
     if (failures === 1 && !s.events.some((e) => e.type === "planning_retry_requested" && e.detail === trigger.id)) return null;
-    const eligibility = getEligibleCandidates(derivePlanningContext(s, this.scenario.maxUserTurns));
+    const eligibility = getEligibleCandidates(derivePlanningContext(s, this.scenarioOf(s).maxUserTurns));
     if (eligibility.kind !== "candidates") return null;
     return { kind: "plan", trigger, attempt: failures === 1 ? 2 : 1, eligibility };
   }
 
   /** Traces the deterministic eligibility decision once per input (the post-commit recheck is not repeated). */
   private traceEligibility(s: Snapshot) {
-    if (!this.options.trace || !this.planningEnabled || s.session.ended) return;
+    if (!this.options.trace || !this.planningEnabled(s) || s.session.ended) return;
     const trigger = triggerOf(s);
     if (!trigger) return;
     const key = trigger.id;
     if (this.lastEligibility.get(s.session.id) === key) return;
     this.lastEligibility.set(s.session.id, key);
-    const e = getEligibleCandidates(derivePlanningContext(s, this.scenario.maxUserTurns));
+    const e = getEligibleCandidates(derivePlanningContext(s, this.scenarioOf(s).maxUserTurns));
     const title =
       e.kind === "candidates" ? `Eligible (${e.ruleId}): ${e.candidates.map((c) => c.moveId).join(", ")}` : `${e.kind === "wait" ? "Wait" : "Controller"} (${e.ruleId}): ${e.reason} — no planner call`;
     this.emit(s.session.id, { inputId: trigger.id, step: "planner.eligibility", agent: "planner", title, status: e.kind === "candidates" ? "ok" : "info", data: e });
@@ -441,8 +448,8 @@ export class ObserverService {
     }
     const sessionId = s.session.id;
     const inputId = work.trigger.id;
-    const ctx = derivePlanningContext(s, this.scenario.maxUserTurns);
-    const input = buildPlannerInput(s, ctx, work.eligibility.candidates, this.scenario.maxUserTurns);
+    const ctx = derivePlanningContext(s, this.scenarioOf(s).maxUserTurns);
+    const input = buildPlannerInput(s, ctx, work.eligibility.candidates, this.scenarioOf(s).maxUserTurns);
     this.emit(sessionId, { inputId, step: "planner.input", agent: "planner", title: `Planner input (revision ${input.basedOnRevision}, ${input.candidates.length} candidates, attempt ${work.attempt})`, status: "info", data: input });
     const raw = this.options.planning!.models();
     const plannerModel = traced(raw.planner, this.options.trace, sessionId, inputId);
@@ -487,9 +494,9 @@ export class ObserverService {
         // A real read of the authoritative service; any change since planning began abandons the turn.
         const fresh = await this.backend.load(sessionId);
         if (!fresh || fresh.session.revision !== turnInput.input.basedOnRevision || fresh.session.ended) return null;
-        const eligibility = getEligibleCandidates(derivePlanningContext(fresh, this.scenario.maxUserTurns));
+        const eligibility = getEligibleCandidates(derivePlanningContext(fresh, this.scenarioOf(fresh).maxUserTurns));
         if (eligibility.kind !== "candidates") return null;
-        return buildPlannerInput(fresh, derivePlanningContext(fresh, this.scenario.maxUserTurns), eligibility.candidates, this.scenario.maxUserTurns);
+        return buildPlannerInput(fresh, derivePlanningContext(fresh, this.scenarioOf(fresh).maxUserTurns), eligibility.candidates, this.scenarioOf(fresh).maxUserTurns);
       },
       executeMove: async (prepared) => {
         const executed = await this.executePrepared(prepared, work, claimId, actorModel);
@@ -543,7 +550,10 @@ export class ObserverService {
       const snap = await fresh();
       result = await runActor(
         { input: assembled.input, envelope, reserved: reservedOf(snap), knownSecrets: knownSecretsOf(snap), signal: abort.signal },
-        { model: actorModel as ActorModel | null, newId: this.newId, now: this.now, readState: async () => executionState(await fresh(), record, claimId, this.now(), this.scenario.maxUserTurns) },
+        { model: actorModel as ActorModel | null, newId: this.newId, now: this.now, readState: async () => {
+          const now = await fresh();
+          return executionState(now, record, claimId, this.now(), this.scenarioOf(now).maxUserTurns);
+        } },
       );
     } finally {
       if (this.inflight.get(sessionId) === abort) this.inflight.delete(sessionId);
@@ -569,7 +579,7 @@ export class ObserverService {
     // 3. Prepared is server-only; it is delivered only after the atomic commit.
     record = { ...record, actorOutput: result.output };
     await this.backend.savePlan(record);
-    const port = new StoreActorCommitPort({ backend: this.backend, sessionId, claimId, now: this.now, newId: this.newId, scenario: this.scenario, record, candidate });
+    const port = new StoreActorCommitPort({ backend: this.backend, sessionId, claimId, now: this.now, newId: this.newId, scenario: this.scenarioOf(await fresh()), record, candidate });
     const delivery = await commitActorResponse(result, port);
     this.emit(sessionId, {
       inputId,

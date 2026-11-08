@@ -2,7 +2,7 @@ import type { AssessmentScope, IssueRecord, ObserverAssessment, PlannerRequestSt
 import type { Action, AdditionId, EvidenceRef, MoveId, PlannerAddition } from "@/contracts/planner";
 import { publicIssue, requestStatusOf, stopConfirmationPending } from "@/server/observer/state";
 import type { Snapshot } from "@/server/observer/store/types";
-import { additionsFor } from "./scenario";
+import { additionsFor, scenarioById, type MoveRegistry } from "./scenario";
 
 /**
  * Pure planning context (planner brief §5–§6). Everything the eligibility rules read, derived from the
@@ -33,6 +33,8 @@ export type PlanningContext = {
   /** Committed plans, oldest first, with the SERVER candidate's evidence (not model-chosen refs). */
   history: PlanHistoryEntry[];
   additions: PlannerAddition[];
+  /** The session scenario's candidate registry (null: every move with default facts). */
+  moves: MoveRegistry | null;
 };
 
 export function triggerOf(s: Snapshot): PlanningContext["trigger"] {
@@ -50,6 +52,7 @@ export function derivePlanningContext(s: Snapshot, maxUserTurns: number): Planni
   const latest = latestUser ? [...applied].reverse().find((a) => a.currentMessageId === latestUser.id) : undefined;
   const introduced = new Set<AdditionId>(s.additions.filter((a) => a.introducedMessageId !== null).map((a) => a.id));
   return {
+    moves: scenarioById(s.session.scenarioId, s.session.scenarioVersion)?.moves ?? null,
     sessionId: s.session.id,
     revision: s.session.revision,
     stage: s.session.stage,

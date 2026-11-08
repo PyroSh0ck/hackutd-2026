@@ -9,6 +9,10 @@ export const LEGACY_OPENING =
   "[Practice scenario — fictional] Maple Ridge Bank security desk here. We stopped a suspicious 200-credit transfer on your practice account. To confirm it's really you, read me the 6-digit practice code we just texted you, then approve a 200-credit holding transfer so your funds stay safe. You can call us back at 555-0142 if you want to check.";
 
 export const LEGACY_SCENARIO: ScenarioDefinition = {
+  kind: "legacy",
+  facts: [],
+  moves: null,
+  portal: null,
   id: "legacy-observer-v1",
   version: 0,
   senderName: "Maple Ridge Bank (fictional)",

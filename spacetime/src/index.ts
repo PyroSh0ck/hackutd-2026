@@ -30,7 +30,7 @@ import {
 import type { Env } from '@/server/engine/decide';
 import { snapshotOf, type SessionData } from '@/server/engine/ops';
 import { compareSummaries, summaryOf } from '@/server/engine/history';
-import { MOBILE_CODE_SCENARIO } from '@/server/planner/scenario';
+import { MOBILE_CODE_SCENARIO, scenarioById } from '@/server/planner/scenario';
 
 // ---------------------------------------------------------------------------------------------- tables
 
@@ -204,7 +204,12 @@ function flushIds(tx: Tx) {
 
 const dateOf = (tx: Tx) => new Date(Number(tx.timestamp.microsSinceUnixEpoch / 1000n));
 
-const envOf = (tx: Tx): Env => ({ scenario: MOBILE_CODE_SCENARIO, newId: () => uuid(tx), now: dateOf(tx) });
+/** The rule environment for a session: its own stored scenario (module-held private truth included). */
+const envOf = (tx: Tx, data?: SessionData): Env => ({
+  scenario: (data && scenarioById(data.session.scenarioId, data.session.scenarioVersion)) || MOBILE_CODE_SCENARIO,
+  newId: () => uuid(tx),
+  now: dateOf(tx),
+});
 
 // ---------------------------------------------------------------------------------------------- load / persist
 
@@ -420,7 +425,7 @@ export const submitUserMessage = spacetimedb.procedure(
   t.string(),
   (ctx, a) =>
     withSession(ctx, a.sessionId, (data, tx) =>
-      cmdSubmitMessage(data, { key: a.idempotencyKey, content: a.content, payloadHash: a.payloadHash, messageId: uuid(tx) }, envOf(tx))
+      cmdSubmitMessage(data, { key: a.idempotencyKey, content: a.content, payloadHash: a.payloadHash, messageId: uuid(tx) }, envOf(tx, data))
     )
 );
 
@@ -447,12 +452,12 @@ export const submitTrainingEvent = spacetimedb.procedure(
       ...(a.practiceCode ? { practiceCode: a.practiceCode } : {}),
       ...(a.linkedIssueId ? { linkedIssueId: a.linkedIssueId } : {}),
     };
-    return withSession(ctx, a.sessionId, (data, tx) => cmdSubmitEvent(data, request, a.payloadHash, envOf(tx)));
+    return withSession(ctx, a.sessionId, (data, tx) => cmdSubmitEvent(data, request, a.payloadHash, envOf(tx, data)));
   }
 );
 
 export const requestRetry = spacetimedb.procedure({ sessionId: t.string(), idempotencyKey: t.string(), payloadHash: t.string() }, t.string(), (ctx, a) =>
-  withSession(ctx, a.sessionId, (data, tx) => cmdRetry(data, { key: a.idempotencyKey, payloadHash: a.payloadHash, eventId: uuid(tx) }, envOf(tx)))
+  withSession(ctx, a.sessionId, (data, tx) => cmdRetry(data, { key: a.idempotencyKey, payloadHash: a.payloadHash, eventId: uuid(tx) }, envOf(tx, data)))
 );
 
 export const claimAgentTurn = spacetimedb.procedure({ sessionId: t.string(), claimId: t.string(), leaseMs: t.u32() }, t.string(), (ctx, a) =>
@@ -466,7 +471,7 @@ export const releaseAgentTurn = spacetimedb.procedure({ sessionId: t.string(), c
 export const recordAssessment = spacetimedb.procedure({ sessionId: t.string(), claimId: t.string(), recordJson: t.string() }, t.string(), (ctx, a) => {
   const parsed = AssessmentRecordSchema.safeParse(JSON.parse(a.recordJson));
   if (!parsed.success || parsed.data.sessionId !== a.sessionId) return JSON.stringify(invalid('assessment record failed validation'));
-  return withSession(ctx, a.sessionId, (data, tx) => cmdApplyAssessment(data, parsed.data, a.claimId, envOf(tx)));
+  return withSession(ctx, a.sessionId, (data, tx) => cmdApplyAssessment(data, parsed.data, a.claimId, envOf(tx, data)));
 });
 
 export const savePlan = spacetimedb.procedure({ sessionId: t.string(), recordJson: t.string() }, t.string(), (ctx, a) => {
@@ -480,11 +485,11 @@ export const savePlan = spacetimedb.procedure({ sessionId: t.string(), recordJso
 export const commitAgentTurn = spacetimedb.procedure({ sessionId: t.string(), claimId: t.string(), recordJson: t.string() }, t.string(), (ctx, a) => {
   const parsed = PlanRecordSchema.safeParse(JSON.parse(a.recordJson));
   if (!parsed.success || parsed.data.sessionId !== a.sessionId) return JSON.stringify(invalid('plan record failed validation'));
-  return withSession(ctx, a.sessionId, (data, tx) => cmdCommitPrepared(data, parsed.data, a.claimId, envOf(tx)));
+  return withSession(ctx, a.sessionId, (data, tx) => cmdCommitPrepared(data, parsed.data, a.claimId, envOf(tx, data)));
 });
 
 export const concludeTurnLimit = spacetimedb.procedure({ sessionId: t.string() }, t.string(), (ctx, a) =>
-  withSession(ctx, a.sessionId, (data, tx) => cmdConcludeTurnLimit(data, envOf(tx)))
+  withSession(ctx, a.sessionId, (data, tx) => cmdConcludeTurnLimit(data, envOf(tx, data)))
 );
 
 export const recordAgentFailure = spacetimedb.procedure(
@@ -494,7 +499,7 @@ export const recordAgentFailure = spacetimedb.procedure(
     const parsed = PlanRecordSchema.safeParse(JSON.parse(a.recordJson));
     if (!parsed.success || parsed.data.sessionId !== a.sessionId) return JSON.stringify(invalid('plan record failed validation'));
     if (a.attempt !== 1 && a.attempt !== 2) return JSON.stringify(invalid('attempt must be 1 or 2'));
-    return withSession(ctx, a.sessionId, (data, tx) => cmdRecordTechnicalFailure(data, parsed.data, a.inputId, a.attempt as 1 | 2, envOf(tx)));
+    return withSession(ctx, a.sessionId, (data, tx) => cmdRecordTechnicalFailure(data, parsed.data, a.inputId, a.attempt as 1 | 2, envOf(tx, data)));
   }
 );
 

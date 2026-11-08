@@ -1,6 +1,6 @@
 import type { AssessmentRecord, SubmitEventRequest } from "@/contracts/observer";
 import type { PlanRecord } from "@/contracts/planner";
-import { secureRandom, type ScenarioDefinition } from "@/server/planner/scenario";
+import { scenarioById, secureRandom, type ScenarioDefinition } from "@/server/planner/scenario";
 import type { StopIntent } from "@/server/planner/stop-intent";
 import type { ApplyResult, CommitResult, InputChange, ObserverStore, Receipt, Snapshot } from "@/server/observer/store/types";
 import type { SessionSummary } from "./history";
@@ -59,8 +59,10 @@ export class StoreBackend implements TrainingBackend {
     readonly name: "postgres" | "memory" = "postgres",
   ) {}
 
-  private env(): Env {
-    return { scenario: this.deps.scenario, newId: this.deps.newId, now: this.deps.now() };
+  /** The rules run with the session's own scenario (stored at creation), never a global default. */
+  private env(s?: Snapshot | null): Env {
+    const scenario = s ? (scenarioById(s.session.scenarioId, s.session.scenarioVersion, [this.deps.scenario]) ?? this.deps.scenario) : this.deps.scenario;
+    return { scenario, newId: this.deps.newId, now: this.deps.now() };
   }
 
   load(sessionId: string) {
@@ -90,7 +92,7 @@ export class StoreBackend implements TrainingBackend {
   }
 
   private async audit(sessionId: string, attempted: string): Promise<Ended> {
-    await this.append(sessionId, (s) => ({ change: decideAfterEnd(s, attempted, this.env()) })).catch(() => undefined);
+    await this.append(sessionId, (s) => ({ change: decideAfterEnd(s, attempted, this.env(s)) })).catch(() => undefined);
     return { kind: "ended" };
   }
 
@@ -106,7 +108,7 @@ export class StoreBackend implements TrainingBackend {
     if (dup) return dup;
     if ((await this.store.load(sessionId))?.session.ended) return this.audit(sessionId, "message");
     const messageId = this.deps.newId();
-    const r = await this.append(sessionId, (s) => decideMessage(s, { ...input, messageId }, this.env()));
+    const r = await this.append(sessionId, (s) => decideMessage(s, { ...input, messageId }, this.env(s)));
     if ("value" in r) return { kind: "committed", messageId, intent: r.value.intent, endedNow: r.value.endedNow };
     if ("conflict" in r) return (await this.duplicateOf(sessionId, input.key))!;
     return { kind: "rejected", rejection: r };
@@ -116,7 +118,7 @@ export class StoreBackend implements TrainingBackend {
     const dup = await this.duplicateOf(sessionId, request.idempotencyKey);
     if (dup) return dup;
     if ((await this.store.load(sessionId))?.session.ended) return this.audit(sessionId, request.type);
-    const r = await this.append(sessionId, (s) => decideEvent(s, request, payloadHash, this.env()));
+    const r = await this.append(sessionId, (s) => decideEvent(s, request, payloadHash, this.env(s)));
     if ("value" in r) return { kind: "committed", eventId: r.value.primaryId, challengeId: r.value.challengeId };
     if ("conflict" in r) return (await this.duplicateOf(sessionId, request.idempotencyKey))!;
     return { kind: "rejected", rejection: r };
@@ -127,7 +129,7 @@ export class StoreBackend implements TrainingBackend {
     if (dup) return dup;
     if ((await this.store.load(sessionId))?.session.ended) return this.audit(sessionId, "retry");
     const eventId = this.deps.newId();
-    const r = await this.append(sessionId, (s) => decideRetry(s, { ...input, eventId }, this.env()));
+    const r = await this.append(sessionId, (s) => decideRetry(s, { ...input, eventId }, this.env(s)));
     if ("value" in r) return { kind: "committed", eventId };
     if ("conflict" in r) return (await this.duplicateOf(sessionId, input.key))!;
     return { kind: "rejected", rejection: r };
@@ -153,7 +155,7 @@ export class StoreBackend implements TrainingBackend {
 
   async commitPrepared(sessionId: string, record: PlanRecord, claimId: string): Promise<CommitPreparedResult> {
     const snapshot = await this.store.load(sessionId);
-    const commit = snapshot && decideCommit(snapshot, record, claimId, this.env());
+    const commit = snapshot && decideCommit(snapshot, record, claimId, this.env(snapshot));
     if (!commit) {
       await this.store.savePlan({ ...record, status: "stale" });
       return { kind: "stale", messageId: null };
@@ -163,11 +165,11 @@ export class StoreBackend implements TrainingBackend {
   }
 
   async concludeTurnLimit(sessionId: string) {
-    await this.append(sessionId, (s) => ({ change: decideTurnLimit(s, this.env()) }));
+    await this.append(sessionId, (s) => ({ change: decideTurnLimit(s, this.env(s)) }));
   }
 
   async recordTechnicalFailure(sessionId: string, record: PlanRecord, inputId: string, attempt: 1 | 2) {
     await this.store.savePlan(record);
-    await this.append(sessionId, (s) => ({ change: decideTechnicalFailure(s, inputId, attempt, this.env()) }));
+    await this.append(sessionId, (s) => ({ change: decideTechnicalFailure(s, inputId, attempt, this.env(s)) }));
   }
 }

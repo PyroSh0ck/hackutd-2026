@@ -54,6 +54,7 @@ export function ctx(over: Partial<PlanningContext> & { a?: Partial<ObserverAsses
   const { a, resolution, ...rest } = over;
   const requestId = rest.request?.id ?? null;
   return {
+    moves: null,
     sessionId: "s-1",
     revision: 7,
     stage: "active",

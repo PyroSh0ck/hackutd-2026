@@ -62,7 +62,8 @@ export const ForbiddenClaimCodeSchema = z.enum([
 ]);
 export type ForbiddenClaimCode = z.infer<typeof ForbiddenClaimCodeSchema>;
 
-export const FactIdSchema = z.enum(["F01", "F02", "F03", "F04", "F05"]);
+/** F01–F05: mobile-code-01 (fraudulent). L01–L04: mobile-notice-01 (legitimate). Never shared across scenarios. */
+export const FactIdSchema = z.enum(["F01", "F02", "F03", "F04", "F05", "L01", "L02", "L03", "L04"]);
 export const AdditionIdSchema = z.enum(["case_reference", "team_label"]);
 export type AdditionId = z.infer<typeof AdditionIdSchema>;
 
@@ -104,8 +105,8 @@ export type PlannerAddition = z.infer<typeof PlannerAdditionSchema>;
 
 export const PlannerInputSchema = z.strictObject({
   sessionId: Id,
-  scenarioId: z.literal(SCENARIO_ID),
-  scenarioVersion: z.literal(SCENARIO_VERSION),
+  scenarioId: z.enum([SCENARIO_ID, "mobile-notice-01"]),
+  scenarioVersion: z.number().int().min(1),
   basedOnRevision: z.number().int().min(1),
   policyVersion: z.string().min(1),
   observer: PlannerObservationSchema,
