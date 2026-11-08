@@ -1,0 +1,14 @@
+/* Designer-owned design tokens. Loaded once from src/app/layout.tsx.
+   Set at :root so portaled overlays (dialogs, toasts, menus) receive them too.
+   Component CSS modules keep fallbacks, so deleting a token never breaks layout. */
+:root {
+  --ui-primary: #2458d3;
+  --ui-on-primary: #fff;
+  --ui-surface: #fff;
+  --ui-text: #172033;
+  --ui-muted: #475569;
+  --ui-border: #cbd5e1;
+  --ui-danger: #b42318;
+  --ui-focus: #2458d3;
+  --ui-radius: 0.6rem;
+}

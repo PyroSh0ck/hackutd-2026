@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "name": "task",
+  "plural": "tasks",
+  "label": "Task",
+  "pluralLabel": "Tasks",
+  "description": "Things you need to get done.",
+  "operations": ["create", "list", "detail", "update", "delete"],
+  "ownership": "current-user",
+  "layout": "list-with-create-form",
+  "fields": [
+    { "name": "title", "type": "string", "required": true, "maxLength": 100 },
+    { "name": "notes", "type": "text", "maxLength": 1000 },
+    {
+      "name": "status",
+      "type": "enum",
+      "required": true,
+      "default": "todo",
+      "values": [
+        { "value": "todo", "label": "To do" },
+        { "value": "in_progress", "label": "In progress" },
+        { "value": "done", "label": "Done" }
+      ]
+    },
+    { "name": "dueDate", "type": "date", "label": "Due date" },
+    { "name": "estimateHours", "type": "int", "label": "Estimate (hours)", "min": 0, "max": 1000 },
+    { "name": "flagged", "type": "boolean" }
+  ],
+  "list": { "titleField": "title", "searchFields": ["title", "notes"], "pageSize": 20 }
+}

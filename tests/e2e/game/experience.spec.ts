@@ -1,0 +1,52 @@
+import { expect, test } from "@playwright/test";
+
+test("fixture loss, evidence replay, and separate checkpoint practice", async ({ page }, info) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.goto("/");
+  await page.getByRole("link", { name: "Play the fixture preview" }).click();
+  await expect(page.getByText("Public fixture preview · no live calls")).toBeVisible();
+  await page.getByLabel("Your reply").fill("How do I secure my account?");
+  await page.getByRole("button", { name: "Send reply", exact: true }).click();
+  await page.getByRole("button", { name: "Inspect request", exact: true }).click();
+  await expect(page.getByText("External account ••••8812", { exact: false })).toBeVisible();
+  await page.screenshot({ path: info.outputPath("payment-inspection.png"), fullPage: true });
+  await page.getByRole("button", { name: "Approve transfer…" }).click();
+  await page.getByRole("button", { name: "Confirm approval" }).click();
+  await expect(page.getByText("500 credits lost", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Read your debrief" }).click();
+  await expect(page.getByText("0 / 100", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Replay the evidence", exact: true }).click();
+  await expect(page.getByText("Server reconstruction matches the saved state.")).toBeVisible();
+  await page.screenshot({ path: info.outputPath("loss-replay.png"), fullPage: true });
+  await page.getByRole("button", { name: "Retry before the payment decision" }).click();
+  await expect(page.getByText("Checkpoint practice · separate attempt")).toBeVisible();
+  await page.getByRole("button", { name: "Verify through official line" }).click();
+  await expect(page.getByText("Verified through trusted contact", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Reject request", exact: true }).click();
+  await page.getByRole("button", { name: "Read your debrief" }).click();
+  await expect(page.getByText("90 / 100", { exact: true })).toBeVisible();
+  await page.screenshot({ path: info.outputPath("protected-practice.png"), fullPage: true });
+  expect(errors).toEqual([]);
+});
+
+test("mobile devices, pending lock, explicit unsupported-path error and restart", async ({ page }, info) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/play");
+  await expect(page.getByLabel("Your reply")).toBeVisible();
+  await page.getByRole("button", { name: "End conversation", exact: true }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "no committed public snapshot" })).toBeVisible();
+  await page.getByRole("button", { name: "Restart", exact: true }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "no committed public snapshot" })).toHaveCount(0);
+  await page.getByLabel("Your reply").fill("Tell me more");
+  await page.getByRole("button", { name: "Send reply", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Send reply", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "View payment request in Bank" }).click();
+  await expect(page.getByRole("button", { name: "Inspect request", exact: true })).toBeVisible();
+  await page.screenshot({ path: info.outputPath("mobile-bank.png"), fullPage: true });
+  await page.getByRole("button", { name: "Contacts", exact: true }).click();
+  await page.getByRole("button", { name: "Verify through official line" }).click();
+  await expect(page.getByText("Verified through trusted contact", { exact: true })).toBeVisible();
+  await page.screenshot({ path: info.outputPath("mobile-contacts.png"), fullPage: true });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});

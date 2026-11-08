@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "name": "expense",
+  "plural": "expenses",
+  "label": "Expense",
+  "pluralLabel": "Expenses",
+  "operations": [
+    "create",
+    "list",
+    "delete"
+  ],
+  "ownership": "current-user",
+  "layout": "list-with-create-form",
+  "fields": [
+    {
+      "name": "merchant",
+      "type": "string",
+      "required": true,
+      "maxLength": 60
+    },
+    {
+      "name": "amount",
+      "type": "decimal",
+      "required": true,
+      "scale": 2,
+      "min": 0.01,
+      "max": 100000
+    },
+    {
+      "name": "spentOn",
+      "type": "date",
+      "label": "Spent on",
+      "required": true,
+      "min": "2020-01-01"
+    },
+    {
+      "name": "category",
+      "type": "enum",
+      "values": [
+        {
+          "value": "travel",
+          "label": "Travel"
+        },
+        {
+          "value": "meals",
+          "label": "Meals"
+        },
+        {
+          "value": "software",
+          "label": "Software"
+        }
+      ]
+    },
+    {
+      "name": "approverEmail",
+      "type": "email",
+      "label": "Approver email"
+    },
+    {
+      "name": "reimbursable",
+      "type": "boolean",
+      "default": true,
+      "hint": "Uncheck for personal spending."
+    },
+    {
+      "name": "projectId",
+      "type": "belongsTo",
+      "resource": "project"
+    }
+  ],
+  "list": {
+    "titleField": "merchant",
+    "searchFields": [
+      "merchant",
+      "approverEmail"
+    ],
+    "pageSize": 10
+  }
+}

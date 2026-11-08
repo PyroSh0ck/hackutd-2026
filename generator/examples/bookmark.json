@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "name": "bookmark",
+  "plural": "bookmarks",
+  "label": "Bookmark",
+  "pluralLabel": "Bookmarks",
+  "description": "Links worth keeping.",
+  "operations": ["create", "list", "detail"],
+  "ownership": "current-user",
+  "layout": "list-with-create-form",
+  "fields": [
+    { "name": "name", "type": "string", "required": true, "maxLength": 80 },
+    { "name": "url", "type": "url", "label": "URL", "required": true },
+    { "name": "rating", "type": "int", "min": 1, "max": 5, "default": 3 }
+  ],
+  "list": { "titleField": "name", "searchFields": ["name", "url"], "pageSize": 50 }
+}

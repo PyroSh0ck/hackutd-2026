@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(pnpm check)",
+      "Bash(pnpm lint)",
+      "Bash(pnpm typecheck)",
+      "Bash(pnpm test)",
+      "Bash(pnpm test *)",
+      "Bash(pnpm build)",
+      "Bash(pnpm gen *)",
+      "Bash(pnpm -s gen *)",
+      "Bash(pnpm exec vitest *)",
+      "Bash(pnpm exec eslint *)",
+      "Bash(pnpm exec tsc *)",
+      "Bash(pnpm exec playwright test *)",
+      "Bash(pnpm test:api)",
+      "Bash(pnpm test:e2e)",
+      "Bash(pnpm test:integration)",
+      "Bash(pnpm exec prisma validate)",
+      "Bash(pnpm exec prisma generate)",
+      "Bash(pnpm exec prisma format)",
+      "Bash(pnpm db:migrate:test)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git show *)"
+    ],
+    "deny": [
+      "Read(./.env.local)",
+      "Read(./.env.test.local)",
+      "Read(./.env.production*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/guard.mjs"
+            ],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/lint-file.mjs"
+            ],
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/stop-check.mjs"
+            ],
+            "timeout": 300
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/notify-discord.mjs"
+            ],
+            "async": true,
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

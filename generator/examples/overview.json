@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "kind": "dashboard",
+  "name": "overview",
+  "label": "Overview",
+  "description": "Your work and spending at a glance.",
+  "stats": [
+    { "id": "openTasks", "label": "Tasks to do", "resource": "task", "aggregate": "count", "where": { "status": "todo" } },
+    { "id": "flaggedTasks", "label": "Flagged tasks", "resource": "task", "aggregate": "count", "where": { "flagged": true } },
+    { "id": "estimateTotal", "label": "Estimated hours", "resource": "task", "aggregate": "sum", "field": "estimateHours" },
+    { "id": "spent", "label": "Total spent", "resource": "expense", "aggregate": "sum", "field": "amount" },
+    { "id": "milestones", "label": "Milestones", "resource": "milestone", "aggregate": "count" },
+    { "id": "avgRating", "label": "Average rating", "resource": "bookmark", "aggregate": "avg", "field": "rating" }
+  ]
+}

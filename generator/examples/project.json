@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "name": "project",
+  "plural": "projects",
+  "label": "Project",
+  "pluralLabel": "Projects",
+  "operations": ["create", "list", "detail", "update", "delete"],
+  "ownership": "current-user",
+  "layout": "list-with-create-form",
+  "fields": [
+    { "name": "name", "type": "string", "required": true, "maxLength": 80 },
+    { "name": "summary", "type": "text", "maxLength": 500 }
+  ],
+  "list": { "titleField": "name", "searchFields": ["name", "summary"], "pageSize": 20 }
+}

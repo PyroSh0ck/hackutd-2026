@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "name": "milestone",
+  "plural": "milestones",
+  "label": "Milestone",
+  "pluralLabel": "Milestones",
+  "operations": ["create", "list", "detail", "update", "delete"],
+  "ownership": "current-user",
+  "layout": "list-with-create-form",
+  "fields": [
+    { "name": "title", "type": "string", "required": true, "maxLength": 100 },
+    { "name": "projectId", "type": "belongsTo", "resource": "project", "required": true },
+    { "name": "dueOn", "type": "date", "label": "Due on" },
+    { "name": "reached", "type": "boolean" }
+  ],
+  "list": { "titleField": "title", "pageSize": 20 }
+}

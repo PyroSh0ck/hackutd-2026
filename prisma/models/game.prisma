@@ -1,0 +1,86 @@
+// Scamper game persistence. Owned by the engine/backend worker.
+// Events are immutable and append-only; `state` is a cache of folding them (checked by replay).
+
+model GameSession {
+  id                     String    @id @db.Uuid
+  /// Anonymous player id from the signed `scamper_player` cookie. Never sent to clients.
+  ownerKey               String
+  scenarioId             String
+  scenarioVersion        Int
+  opponentMode           String
+  version                Int
+  lastSequence           Int
+  state                  Json
+  pendingTurnId          String?
+  pendingTurnStartedAt   DateTime?
+  pendingTurnExpiresAt   DateTime?
+  lastTurnId             String?
+  lastTurnOrigin         String?
+  lastTurnFallbackReason String?
+  parentSessionId        String?   @db.Uuid
+  /// Event id in the parent session the fork branched after.
+  checkpointEventId      String?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  parent   GameSession?        @relation("GameSessionFork", fields: [parentSessionId], references: [id], onDelete: Restrict)
+  forks    GameSession[]       @relation("GameSessionFork")
+  events   GameEvent[]
+  receipts GameActionReceipt[]
+  turns    GameTurn[]
+
+  @@index([ownerKey])
+  @@index([parentSessionId])
+  @@map("game_session")
+}
+
+model GameEvent {
+  id            String      @id
+  sessionId     String      @db.Uuid
+  sequence      Int
+  type          String
+  actor         String
+  payload       Json
+  actionId      String?
+  sourceEventId String?
+  createdAt     DateTime
+  session       GameSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, sequence])
+  @@map("game_event")
+}
+
+/// Idempotency receipts for player actions (`<uuid>`) and opponent tool calls (`turn:<turnId>:<callId>`).
+model GameActionReceipt {
+  sessionId     String      @db.Uuid
+  actionId      String
+  payloadHash   String
+  resultVersion Int
+  eventIds      String[]
+  createdAt     DateTime    @default(now())
+  session       GameSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@id([sessionId, actionId])
+  @@map("game_action_receipt")
+}
+
+/// Developer evidence for one opponent turn: tool calls and outcome. No prompts, no chain-of-thought.
+model GameTurn {
+  id                String      @id
+  sessionId         String      @db.Uuid
+  triggerActionId   String
+  status            String
+  origin            String?
+  fallbackReason    String?
+  modelId           String?
+  modelRequests     Int         @default(0)
+  latencyMs         Int?
+  observationFields String[]
+  toolCalls         Json
+  startedAt         DateTime
+  completedAt       DateTime?
+  session           GameSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, startedAt])
+  @@map("game_turn")
+}
