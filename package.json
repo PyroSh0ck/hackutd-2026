@@ -26,6 +26,8 @@
     "spacetime:start": "spacetime start --listen-addr 127.0.0.1:3300 --non-interactive",
     "spacetime:publish": "spacetime publish scamper-training --server stdb-local --module-path ./spacetime --yes",
     "spacetime:setup": "tsx scripts/spacetime-setup.ts",
+    "spacetime:publish:maincloud": "spacetime publish cybersleuth-db --server maincloud --module-path ./spacetime",
+    "spacetime:setup:maincloud": "SPACETIME_URL=https://maincloud.spacetimedb.com SPACETIME_DATABASE=cybersleuth-db SPACETIME_SERVER=maincloud SPACETIME_WORKER_FILE=.spacetime/maincloud.json tsx scripts/spacetime-setup.ts",
     "spacetime:typecheck": "tsc --noEmit -p spacetime/tsconfig.json",
     "test:spacetime": "vitest run --config vitest.spacetime.config.mts",
     "practice:smoke": "tsx --conditions=react-server scripts/practice-smoke.ts"
