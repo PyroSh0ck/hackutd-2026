@@ -1,0 +1,108 @@
+// Observer subsystem persistence (docs/agents/observer_agent). Append-only history; views are derived.
+// `revision` on child rows is the session revision that created them: one explicit total order.
+
+model ObserverSession {
+  id                   String    @id @db.Uuid
+  /// Anonymous player id from the signed `scamper_player` cookie. Never sent to clients.
+  ownerKey             String
+  threadId             String    @unique @db.Uuid
+  revision             Int
+  conversationRevision Int
+  turn                 Int
+  ended                Boolean   @default(false)
+  /// Durable, leased processing claim (one processor per session across instances).
+  claimId              String?
+  claimExpiresAt       DateTime?
+  createdAt            DateTime
+  updatedAt            DateTime  @updatedAt
+
+  messages    ObserverMessage[]
+  requests    ObserverRequest[]
+  events      ObserverEvent[]
+  receipts    ObserverReceipt[]
+  assessments ObserverAssessment[]
+
+  @@index([ownerKey])
+  @@map("observer_session")
+}
+
+model ObserverMessage {
+  id        String          @id
+  sessionId String          @db.Uuid
+  revision  Int
+  turn      Int
+  role      String
+  content   String
+  createdAt DateTime
+  session   ObserverSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, revision])
+  @@map("observer_message")
+}
+
+model ObserverRequest {
+  id                    String          @id
+  sessionId             String          @db.Uuid
+  revision              Int
+  introducedByMessageId String
+  targetAction          String
+  description           String
+  status                String
+  /// Insertion order: several requests can share one revision (one message introducing many).
+  seq                   Int             @default(autoincrement())
+  session               ObserverSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, revision])
+  @@map("observer_request")
+}
+
+/// Trusted application events. No submitted codes or account contents are stored.
+model ObserverEvent {
+  id          String          @id
+  sessionId   String          @db.Uuid
+  revision    Int
+  requestId   String?
+  turn        Int
+  type        String
+  /// Server-issued id linking official_directory_opened to official_verification_completed.
+  challengeId String?
+  createdAt   DateTime
+  session     ObserverSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, revision])
+  @@map("observer_event")
+}
+
+/// Idempotency receipts for client submissions (messages and events).
+model ObserverReceipt {
+  sessionId   String          @db.Uuid
+  key         String
+  kind        String
+  payloadHash String
+  resultId    String
+  challengeId String?
+  createdAt   DateTime        @default(now())
+  session     ObserverSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@id([sessionId, key])
+  @@map("observer_receipt")
+}
+
+/// One row per pipeline run. `appliedKey` is set only for applied records, so the unique index allows
+/// many stale (audit) rows but at most one applied interpretation per (request, message) pair.
+model ObserverAssessment {
+  id               String          @id
+  sessionId        String          @db.Uuid
+  requestId        String
+  currentMessageId String
+  basedOnRevision  Int
+  application      String
+  appliedKey       String?         @unique
+  seq              Int             @default(autoincrement())
+  record           Json
+  createdAt        DateTime
+  session          ObserverSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, seq])
+  @@map("observer_assessment")
+}

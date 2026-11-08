@@ -20,7 +20,8 @@
     "gen": "tsx generator/cli.ts",
     "check": "pnpm lint && pnpm typecheck && pnpm test",
     "verify": "pnpm check && pnpm test:integration",
-    "game:smoke": "tsx --conditions=react-server scripts/game-smoke.ts"
+    "game:smoke": "tsx --conditions=react-server scripts/game-smoke.ts",
+    "observer:eval": "tsx --conditions=react-server scripts/observer-eval.ts"
   },
   "dependencies": {
     "@better-auth/prisma-adapter": "1.7.15",

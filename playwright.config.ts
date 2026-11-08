@@ -51,6 +51,8 @@ export default defineConfig({
       BETTER_AUTH_URL: testEnv.BETTER_AUTH_URL,
       LOG_LEVEL: "warn",
       E2E_TEST: "1",
+      // Deterministic, labeled observer model for HTTP plumbing tests (requires E2E_TEST=1 as well).
+      OBSERVER_MODEL_MODE: "fixture",
     },
   },
 });
