@@ -8,6 +8,7 @@ import { errorMessage } from "@/lib/api-client";
 import { scamperApi, sessionIndex } from "./adapter";
 import { SessionStatus } from "./history";
 import { ACTION_LABEL, dateTime, OUTCOME, time } from "./labels";
+import { HowItWorked } from "./explain";
 import { Mascot } from "./mascot";
 import { InlineError } from "./ui";
 import s from "./scamper.module.css";
@@ -148,6 +149,8 @@ export function SessionReview({ view }: { view: ObserverSessionView }) {
           ))}
         </ol>
       </details>
+
+      {view.ended && <HowItWorked sessionId={view.sessionId} />}
 
       <div className={s.row}>
         <button type="button" className={s.button} onClick={tryAgain}>

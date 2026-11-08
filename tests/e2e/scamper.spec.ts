@@ -67,6 +67,12 @@ test("verification path: request card → official check → report → review �
   await expect(page.getByRole("heading", { name: "Your practice review" })).toBeVisible();
   await expect(page.getByText("Reported and blocked the sender")).toBeVisible();
 
+  // How this session worked: what actually ran, from stored audit records (no reasoning).
+  await page.getByText("How this session worked").click();
+  await expect(page.getByText("Training state")).toBeVisible();
+  await expect(page.getByText(process.env.TRAINING_BACKEND === "spacetime" ? "SpacetimeDB module (authoritative)" : "Postgres")).toBeVisible();
+  if (process.env.PLANNER_PROTOCOL === "tools") await expect(page.getByText("get_training_context").first()).toBeVisible();
+
   await page.getByRole("link", { name: "Case history" }).click();
   await expect(page.getByRole("heading", { name: "Case history" })).toBeVisible();
   await expect(page.getByText("Defense demonstrated").filter({ visible: true })).toHaveCount(1);

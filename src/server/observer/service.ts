@@ -10,6 +10,7 @@ import {
   type SubmitEventRequest,
   type SubmitMessageRequest,
 } from "@/contracts/observer";
+import type { ExplainResponse } from "@/contracts/explain";
 import type { Eligibility, PlanRecord } from "@/contracts/planner";
 import { HttpError, NotFoundError } from "@/server/http/errors";
 import { derivePlanningContext, triggerOf } from "@/server/planner/context";
@@ -197,6 +198,53 @@ export class ObserverService {
 
   async plans(ownerKey: string, sessionId: string): Promise<PlanRecord[]> {
     return (await this.owned(ownerKey, sessionId)).plans;
+  }
+
+  /**
+   * "How this session worked" (brief §9): concise decision summaries from stored audit records, for ended
+   * sessions only. Never prompts, raw model output, or reasoning.
+   */
+  async explain(ownerKey: string, sessionId: string): Promise<ExplainResponse> {
+    const s = await this.owned(ownerKey, sessionId);
+    if (!s.session.ended) throw rejected("SESSION_ACTIVE", "The technical summary is available after the practice ends.");
+    const inputs = [
+      ...s.messages.filter((m) => m.role === "user").map((m) => ({ id: m.id, kind: "message" as const })),
+      ...s.events.filter((e) => s.plans.some((p) => p.inputId === e.id)).map((e) => ({ id: e.id, kind: "event" as const })),
+    ];
+    const turns = inputs.map(({ id, kind }) => {
+      const a = [...s.assessments].reverse().find((x) => x.currentMessageId === id && x.application === "applied");
+      const plan = [...s.plans].reverse().find((p) => p.inputId === id && p.status === "committed") ?? [...s.plans].reverse().find((p) => p.inputId === id);
+      const candidate = plan?.candidateSnapshot.find((c) => c.id === plan.acceptedPlan?.candidateId);
+      return {
+        inputId: id,
+        inputKind: kind,
+        observer: a
+          ? { model: a.observerModel, decision: a.finalAssessment.decision.label, resolution: a.resolution, reviewStatus: a.reviewStatus, evidenceCount: a.finalAssessment.decision.evidence.length, validationErrors: a.validation.errors.length }
+          : null,
+        planner: plan
+          ? {
+              protocol: plan.plannerProtocol ?? ("structured" as const),
+              model: plan.modelId,
+              ruleId: plan.ruleId,
+              move: candidate?.moveId ?? null,
+              status: plan.status,
+              failureReason: plan.failureReason,
+              toolCalls: plan.toolCalls ?? [],
+              committedMessageId: plan.committedMessageId,
+              requestIds: plan.committedMessageId ? s.requests.filter((r) => r.introducedByMessageId === plan.committedMessageId).map((r) => r.id) : [],
+              actorModel: plan.actorModelId,
+            }
+          : null,
+      };
+    });
+    const outcomeRevision = s.events.find((e) => ["conversation_ended", "conversation_reported", "request_rejected", "practice_code_submitted", "turn_limit_reached", "technical_interruption"].includes(e.type) && s.session.ended)?.revision;
+    return {
+      backend: this.backend.name,
+      revision: s.session.revision,
+      outcome: s.session.outcome,
+      outcomeEventIds: s.events.filter((e) => e.revision === outcomeRevision).map((e) => e.id),
+      turns,
+    };
   }
 
   /** The planner handoff and the current deterministic eligibility (no model call). */
