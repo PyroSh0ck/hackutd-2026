@@ -518,6 +518,13 @@ export const ObserverSessionViewSchema = z.strictObject({
     status: VerificationStatusSchema,
     /** Official simulated support result, shown only inside the trusted verification interface. */
     officialResult: z.string().nullable(),
+    /**
+     * Recovery after reload (owner-only GET, no-store): the challenge of the ACTIVE attempt, present only
+     * while the check is in progress. Cancelling invalidates it; a new attempt issues a new challenge.
+     */
+    activeChallengeId: Id.nullable(),
+    /** The started-event id of the active attempt. */
+    attemptId: Id.nullable(),
   }),
   stopConfirmationPending: z.boolean(),
   finalDecisionProceeded: z.boolean(),

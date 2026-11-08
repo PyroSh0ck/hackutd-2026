@@ -301,10 +301,10 @@ function ActivePractice({ initial, onRestart, restarting, restartError }: { init
         onOpenChange={setVerifyOpen}
         view={view}
         busy={busy}
-        challengeId={challengeId}
+        challengeId={challengeId ?? view.verification.activeChallengeId ?? undefined}
         error={actionError}
         onRun={() => void act("official_verification_started", view.verificationLinkIssueId ? { linkedIssueId: view.verificationLinkIssueId } : {})}
-        onComplete={() => void act("official_verification_completed", { challengeId })}
+        onComplete={() => void act("official_verification_completed", { challengeId: challengeId ?? view.verification.activeChallengeId ?? undefined })}
         onCancel={() => void act("official_verification_cancelled")}
         onReport={report}
         onProceed={() => void act("final_decision_proceed")}
@@ -722,7 +722,6 @@ function VerificationDialog(p: {
 
           {view.stage === "verifying" && (
             <>
-              {!p.challengeId && <p className={`${s.muted} ${s.small}`}>This check was started before the page reloaded. Cancel it and run it again to continue.</p>}
               <div className={s.row}>
                 <button type="button" className={s.button} onClick={p.onComplete} disabled={busy || !p.challengeId}>
                   I have read this result

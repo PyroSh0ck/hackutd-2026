@@ -179,6 +179,8 @@ export class ObserverService {
       verification: {
         status: verification.status,
         officialResult: verification.status === "in_progress" || verification.status === "completed" ? this.scenario.officialResult : null,
+        activeChallengeId: verification.status === "in_progress" && s.session.stage === "verifying" ? verification.activeChallengeId : null,
+        attemptId: verification.status === "in_progress" && s.session.stage === "verifying" ? ([...s.events].reverse().find((e) => e.type === "official_verification_started" && e.challengeId === verification.activeChallengeId)?.id ?? null) : null,
       },
       stopConfirmationPending: stopConfirmationPending(s.events),
       finalDecisionProceeded: finalDecisionProceeded(s.events),
