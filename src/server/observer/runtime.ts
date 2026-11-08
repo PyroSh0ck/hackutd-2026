@@ -6,6 +6,8 @@ import { actorModelFromEnv } from "@/server/actor/model";
 import type { TrainingBackend } from "@/server/engine/backend";
 import { SpacetimeBackend, spacetimeConfigFromEnv } from "@/server/engine/spacetime-backend";
 import { FixtureActorModel, FixturePlannerModel } from "@/server/planner/testing/fixture-models";
+import { FixtureToolPlannerModel } from "@/server/planner/testing/fixture-tool-model";
+import { toolPlannerFromEnv } from "@/server/planner/tool-model";
 import { plannerModels, readObserverModelConfig, readPlannerModelConfig, structuredModels } from "./model";
 import { ObserverService } from "./service";
 import { PrismaObserverStore } from "./store/prisma-store";
@@ -47,6 +49,8 @@ export function observerService(): ObserverService {
         // Actor v2 uses its own native json_schema adapter (src/server/actor/model.ts); ACTOR_MODEL_ID optional.
         models: () => (fixtureModelsEnabled() ? { planner: new FixturePlannerModel(), actor: new FixtureActorModel() } : { planner: plannerModels(planning).planner, actor: actorModelFromEnv() }),
         timeoutMs: planning.timeoutMs,
+        // PLANNER_PROTOCOL=tools: the planner acts through get_training_context / execute_training_move.
+        ...(process.env.PLANNER_PROTOCOL === "tools" ? { toolPlanner: () => (fixtureModelsEnabled() ? new FixtureToolPlannerModel() : toolPlannerFromEnv()) } : {}),
       },
       // Agent lab trace: development or AGENT_DEBUG=1 only (records prompts and raw model output).
       trace: traceEnabled() ? sharedTrace() : undefined,

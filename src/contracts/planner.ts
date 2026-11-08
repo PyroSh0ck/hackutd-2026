@@ -249,6 +249,20 @@ export const PlanRecordSchema = z.strictObject({
     .optional(),
   /** Set when a durable retry reused an earlier still-applicable plan instead of calling the planner. */
   reusedPlanFrom: Id.nullable().optional(),
+  /** "tools": the planner ran as a function-calling agent over the training service (brief §7). */
+  plannerProtocol: z.enum(["structured", "tools"]).optional(),
+  /** Executed tool calls with the provider's call ids. Summaries only; never model reasoning. */
+  toolCalls: z
+    .array(
+      z.strictObject({
+        callId: z.string().min(1).max(200),
+        name: z.enum(["get_training_context", "execute_training_move"]),
+        status: z.enum(["ok", "invalid", "rejected", "executing"]),
+        summary: z.string().max(500),
+      }),
+    )
+    .max(4)
+    .optional(),
 });
 export type PlanRecord = z.infer<typeof PlanRecordSchema>;
 

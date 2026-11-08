@@ -5,6 +5,7 @@ import { HttpError } from "@/server/http/errors";
 import { ObserverService } from "@/server/observer/service";
 import { FixtureStructuredModel } from "@/server/observer/testing/fixture-model";
 import { FixtureActorModel, FixturePlannerModel } from "@/server/planner/testing/fixture-models";
+import { FixtureToolPlannerModel } from "@/server/planner/testing/fixture-tool-model";
 
 /**
  * Integration against a REAL SpacetimeDB server running the published `spacetime/` module (no mocks of
@@ -15,13 +16,13 @@ import { FixtureActorModel, FixturePlannerModel } from "@/server/planner/testing
 const config = spacetimeConfigFromEnv();
 const OWNER = `anon:spacetime-${randomUUID()}`;
 
-function serviceWith(backend: SpacetimeBackend) {
+function serviceWith(backend: SpacetimeBackend, tools = false) {
   return new ObserverService({
     backend,
     models: () => ({ observer: new FixtureStructuredModel("fixture-observer"), reviewer: new FixtureStructuredModel("fixture-reviewer") }),
     policy: "consequential_and_flagged",
     timeoutMs: 5000,
-    planning: { models: () => ({ planner: new FixturePlannerModel(), actor: new FixtureActorModel() }), timeoutMs: 5000 },
+    planning: { models: () => ({ planner: new FixturePlannerModel(), actor: new FixtureActorModel() }), timeoutMs: 5000, ...(tools ? { toolPlanner: () => new FixtureToolPlannerModel() } : {}) },
   });
 }
 
@@ -137,6 +138,17 @@ describe.skipIf(!config)("SpacetimeDB training module (live local server)", () =
     await expect(intruder.concludeTurnLimit(id)).rejects.toThrow(/unauthorized/);
     // Ownership through the app: another owner key gets a 404, never the session.
     await expect(service.getSession("anon:someone-else", id)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("tool-calling planner: execute_training_move creates the request through the module's atomic commit", async () => {
+    const tools = serviceWith(backend, true);
+    const id = (await tools.createSession(OWNER)).session.sessionId;
+    const v = (await tools.submitMessage(OWNER, id, { idempotencyKey: randomUUID(), content: "Sure, go on." })).session;
+    expect(v.requestStatus).toBe("pending");
+    const record = (await backend.load(id))!.plans.find((p) => p.status === "committed")!;
+    expect(record.plannerProtocol).toBe("tools");
+    expect(record.toolCalls!.map((c) => c.name)).toEqual(["get_training_context", "execute_training_move"]);
+    expect(record.committedMessageId).toBe(v.requests.at(-1)!.introducedByMessageId);
   });
 
   it("SpacetimeDB is essential: when it is unreachable no training transition happens (no Postgres fallback)", async () => {

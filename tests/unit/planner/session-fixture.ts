@@ -9,18 +9,22 @@ import { derivePlanningContext } from "@/server/planner/context";
 import { getEligibleCandidates } from "@/server/planner/eligibility";
 import { buildPlannerInput } from "@/server/planner/input";
 import { MAX_USER_TURNS } from "@/server/planner/scenario";
+import type { ToolChatModel } from "@/server/planner/tool-model";
 
 export const OWNER = "anon:planner-tests";
 
 /** MVP scenario service over the memory store with the fixture observer and injectable planner/actor. */
-export function mvp(options: { planner?: () => StructuredModel | null; actor?: () => StructuredModel | null; store?: MemoryObserverStore; planning?: boolean } = {}) {
+export function mvp(options: { planner?: () => StructuredModel | null; actor?: () => StructuredModel | null; toolPlanner?: () => ToolChatModel | null; store?: MemoryObserverStore; planning?: boolean } = {}) {
   const store = options.store ?? new MemoryObserverStore();
   const service = new ObserverService({
     store,
     models: () => ({ observer: new FixtureStructuredModel("fixture-observer"), reviewer: new FixtureStructuredModel("fixture-reviewer") }),
     policy: "consequential_and_flagged",
     timeoutMs: 1000,
-    planning: options.planning === false ? null : { models: () => ({ planner: options.planner?.() ?? null, actor: options.actor?.() ?? null }), timeoutMs: 1000 },
+    planning:
+      options.planning === false
+        ? null
+        : { models: () => ({ planner: options.planner?.() ?? null, actor: options.actor?.() ?? null }), timeoutMs: 1000, ...(options.toolPlanner ? { toolPlanner: options.toolPlanner } : {}) },
   });
   return { store, service };
 }

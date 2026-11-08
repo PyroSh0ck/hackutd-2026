@@ -20,6 +20,8 @@ import { commitActorResponse } from "@/server/actor/commit";
 import { actorAudit, assembleActor, executionState, knownSecretsOf, reservedOf, StoreActorCommitPort } from "@/server/actor/controller";
 import type { ActorModel } from "@/server/actor/model";
 import { runActor } from "@/server/actor/run";
+import { runToolPlanningTurn, type MoveResult } from "@/server/planner/tool-run";
+import type { ToolChatModel } from "@/server/planner/tool-model";
 import { StoreBackend, VersionConflictError, type TrainingBackend } from "@/server/engine/backend";
 import { decideIssues, technicalNotice, turnLimitDue, type Rejection } from "@/server/engine/decide";
 import { MOBILE_CODE_SCENARIO, type ScenarioDefinition } from "@/server/planner/scenario";
@@ -56,6 +58,11 @@ import type { ObserverStore, Snapshot } from "./store/types";
 export type PlanningOptions = {
   models: () => { planner: StructuredModel | null; actor: StructuredModel | null };
   timeoutMs: number;
+  /**
+   * Function-calling planner (Spacetime/Nemotron brief §7). When set, the planner reads context and
+   * executes its move through tools backed by the training backend instead of returning a structured plan.
+   */
+  toolPlanner?: () => ToolChatModel | null;
 };
 
 export type ObserverServiceOptions = {
@@ -366,6 +373,10 @@ export class ObserverService {
     const actorModel = traced(raw.actor, this.options.trace, sessionId, inputId);
     const turnInput = { input, inputId, inputKind: work.trigger.kind, attempt: work.attempt, ruleId: work.eligibility.ruleId, sessionActive: s.session.stage === "active" && !s.session.ended };
 
+    if (this.options.planning!.toolPlanner && !(work.attempt === 2 && s.plans.some((p) => p.inputId === inputId && p.acceptedPlan))) {
+      return this.toolPlanStep(s, work, claimId, turnInput, actorModel);
+    }
+
     // 1. Planner (≤2 calls). A durable retry reuses the earlier plan only if its candidate is still eligible.
     const previous = work.attempt === 2 ? [...s.plans].reverse().find((p) => p.inputId === inputId && p.acceptedPlan) : undefined;
     const reused = previous ? reusePlan(previous, turnInput, this.newId, this.now()) : null;
@@ -379,9 +390,62 @@ export class ObserverService {
       data: planned.record,
     });
     if (planned.record.status !== "prepared") return this.technicalFailure(sessionId, planned.record, work);
+    return (await this.executePrepared(planned.record, work, claimId, actorModel)).step;
+  }
+
+  /**
+   * The planner as a tool-calling agent: get_training_context re-reads the authoritative backend;
+   * execute_training_move runs `executePrepared` (actor + atomic backend commit) and returns real ids.
+   */
+  private async toolPlanStep(s: Snapshot, work: Extract<PlanningWork, { kind: "plan" }>, claimId: string, turnInput: Parameters<typeof runPlanningTurn>[0], actorModel: ReturnType<typeof traced>): Promise<"committed" | "stale" | "failed"> {
+    const sessionId = s.session.id;
+    const inputId = work.trigger.id;
+    const model = this.options.planning!.toolPlanner!();
+    let step: "committed" | "stale" | "failed" = "stale";
+    const result = await runToolPlanningTurn(turnInput, {
+      model,
+      timeoutMs: this.options.planning!.timeoutMs,
+      newId: this.newId,
+      now: this.now,
+      readContext: async () => {
+        // A real read of the authoritative service; any change since planning began abandons the turn.
+        const fresh = await this.backend.load(sessionId);
+        if (!fresh || fresh.session.revision !== turnInput.input.basedOnRevision || fresh.session.ended) return null;
+        const eligibility = getEligibleCandidates(derivePlanningContext(fresh, this.scenario.maxUserTurns));
+        if (eligibility.kind !== "candidates") return null;
+        return buildPlannerInput(fresh, derivePlanningContext(fresh, this.scenario.maxUserTurns), eligibility.candidates, this.scenario.maxUserTurns);
+      },
+      executeMove: async (prepared) => {
+        const executed = await this.executePrepared(prepared, work, claimId, actorModel);
+        step = executed.step;
+        return executed.move;
+      },
+    });
+    this.emit(sessionId, {
+      inputId,
+      step: "planner.result",
+      agent: "planner",
+      title: `Tool planner (${model?.modelId ?? "unconfigured"}): ${result.record.toolCalls?.map((c) => `${c.name}→${c.status}`).join(", ") || "no tool call"} · ${result.plannerCalls} model calls`,
+      status: result.outcome.kind === "executed" && result.outcome.move.status === "committed" ? "ok" : "fail",
+      data: { toolCalls: result.record.toolCalls, outcome: result.outcome, record: result.record },
+    });
+    if (result.outcome.kind === "executed") return step;
+    if (result.record.status === "stale") {
+      await this.backend.savePlan(result.record);
+      return "stale";
+    }
+    return this.technicalFailure(sessionId, result.record, work);
+  }
+
+  /** Actor (≤2 calls) and the atomic backend commit for a prepared plan. Shared by both planner protocols. */
+  private async executePrepared(prepared: PlanRecord, work: Extract<PlanningWork, { kind: "plan" }>, claimId: string, actorModel: ReturnType<typeof traced>): Promise<{ step: "committed" | "stale" | "failed"; move: MoveResult }> {
+    const sessionId = prepared.sessionId;
+    const inputId = work.trigger.id;
+    const failed = async (record: PlanRecord, detail: string) => ({ step: await this.technicalFailure(sessionId, record, work), move: { status: "failed" as const, detail } });
+    const stale = (detail: string) => ({ step: "stale" as const, move: { status: "stale" as const, detail } });
 
     // 2. Actor v2 (≤2 calls). The plan is stored first so applicability can be checked against it.
-    let record: PlanRecord = { ...planned.record, actorModelId: actorModel?.modelId ?? "unconfigured" };
+    let record: PlanRecord = { ...prepared, actorModelId: actorModel?.modelId ?? "unconfigured" };
     await this.backend.savePlan(record);
     const candidate = record.candidateSnapshot.find((c) => c.id === record.acceptedPlan!.candidateId)!;
     const processingAttemptId = this.newId();
@@ -392,7 +456,7 @@ export class ObserverService {
       assembled = assembleActor(await fresh(), binding);
     } catch (error) {
       this.emit(sessionId, { inputId, step: "actor.input", agent: "actor", title: "Actor input could not be assembled", status: "fail", data: { error: error instanceof Error ? error.message : String(error) } });
-      return this.technicalFailure(sessionId, { ...record, status: "failed", failureReason: "actor_input_invalid" }, work);
+      return failed({ ...record, status: "failed", failureReason: "actor_input_invalid" }, "actor input could not be assembled");
     }
     const { envelope, ...redacted } = { ...assembled, envelope: { ...assembled.envelope } };
     this.emit(sessionId, { inputId, step: "actor.input", agent: "actor", title: `Actor input (${candidate.moveId}, attempt ${work.attempt})`, status: "info", data: { input: redacted.input, envelope: { ...envelope, ownerKey: "[owner]", claimId: "[claim]" } } });
@@ -420,11 +484,11 @@ export class ObserverService {
     });
     if (result.kind === "discarded") {
       await this.backend.savePlan({ ...record, status: "stale" });
-      return "stale";
+      return stale("state changed while the actor was writing");
     }
     if (result.kind === "failed") {
       const reason = ({ timeout: "actor_timeout", refusal: "actor_refusal", unavailable: "actor_unavailable", http_error: "actor_http_error", invalid_after_repair: "actor_invalid_after_repair" } as const)[result.reason];
-      return this.technicalFailure(sessionId, { ...record, status: result.reason === "invalid_after_repair" ? "rejected" : "failed", failureReason: reason }, work);
+      return failed({ ...record, status: result.reason === "invalid_after_repair" ? "rejected" : "failed", failureReason: reason }, reason);
     }
     // 3. Prepared is server-only; it is delivered only after the atomic commit.
     record = { ...record, actorOutput: result.output };
@@ -439,12 +503,17 @@ export class ObserverService {
       status: delivery.kind === "delivered" ? "ok" : delivery.kind === "discarded" ? "warn" : "fail",
       data: delivery,
     });
-    if (delivery.kind === "delivered") return "committed";
+    if (delivery.kind === "delivered") {
+      const after = (await this.backend.load(sessionId))!;
+      const requestIds = after.requests.filter((r) => r.introducedByMessageId === delivery.messageId).map((r) => r.id);
+      const eventIds = after.events.filter((e) => e.requestId !== null && requestIds.includes(e.requestId) && e.type === "request_presented").map((e) => e.id);
+      return { step: "committed", move: { status: "committed", messageId: delivery.messageId, requestIds, eventIds, revision: after.session.revision } };
+    }
     if (delivery.kind === "discarded") {
       await this.backend.savePlan({ ...record, status: "stale" });
-      return "stale";
+      return stale("the authoritative state changed before commit");
     }
-    return this.technicalFailure(sessionId, { ...record, status: "failed", failureReason: "actor_http_error" }, work);
+    return failed({ ...record, status: "failed", failureReason: "actor_http_error" }, "commit failed");
   }
 
   private async observeStep(snapshot: Snapshot, work: NonNullable<ReturnType<typeof pendingWork>>, claimId: string): Promise<"applied" | "stale" | "duplicate"> {
