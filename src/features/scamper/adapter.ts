@@ -1,6 +1,7 @@
 "use client";
 
 import { ObserverSessionResponseSchema, type ClientEventType, type ObserverSessionResponse, type ObserverSessionView } from "@/contracts/observer";
+import { ReferenceDirectoryResponseSchema } from "@/contracts/reference";
 import { apiRequest } from "@/lib/api-client";
 
 /**
@@ -34,6 +35,7 @@ export const scamperApi = {
         ...(extra.linkedIssueId ? { linkedIssueId: extra.linkedIssueId } : {}),
       },
     }),
+  directory: () => apiRequest("/api/observer/reference-directory", ReferenceDirectoryResponseSchema),
   retry: (id: string) => apiRequest(`${base}/${id}/retry`, ObserverSessionResponseSchema, { method: "POST", body: { idempotencyKey: key() } }),
 };
 

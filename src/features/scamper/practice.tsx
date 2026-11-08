@@ -5,6 +5,7 @@ import { AlertDialog, Dialog } from "radix-ui";
 import { ArrowDown, ClipboardList, ExternalLink, Flag, PanelRight, SendHorizontal, ShieldCheck, User, X } from "lucide-react";
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { ClientEventType, Message, ObserverSessionView } from "@/contracts/observer";
+import type { ReferenceDirectoryResponse } from "@/contracts/reference";
 import { errorMessage } from "@/lib/api-client";
 import { newer, scamperApi, sessionIndex, type EventExtra } from "./adapter";
 import { OUTCOME, startedAt, time } from "./labels";
@@ -17,6 +18,22 @@ import s from "./scamper.module.css";
  * requestStatus, stopConfirmationPending, ended); nothing is inferred from message text. Typing "I accept"
  * in chat never submits the request: only the request card's explicit, confirmed action does.
  */
+
+/** The fictional public directory (server-projected; never includes scenario truth). */
+function useDirectory() {
+  const [directory, setDirectory] = useState<ReferenceDirectoryResponse>();
+  useEffect(() => {
+    let alive = true;
+    scamperApi.directory().then(
+      (d) => alive && setDirectory(d),
+      () => undefined,
+    );
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return directory;
+}
 
 type Phase = { kind: "loading" } | { kind: "ready"; last?: ObserverSessionView } | { kind: "session" };
 
@@ -195,7 +212,8 @@ function ActivePractice({ initial, onRestart, restarting, restartError }: { init
   const report = () => void act("conversation_reported");
   const openCheck = () => setVerifyOpen(true);
 
-  const details = <PracticeDetails view={view} onCheck={openCheck} onReport={report} disabled={busy} />;
+  const directory = useDirectory();
+  const details = <PracticeDetails view={view} directory={directory} onCheck={openCheck} onReport={report} disabled={busy} />;
 
   return (
     <div className={s.workspace}>
@@ -265,6 +283,7 @@ function ActivePractice({ initial, onRestart, restarting, restartError }: { init
             <Dialog.Description className={s.srOnly}>Fictional practice details and the official support check.</Dialog.Description>
             <PracticeDetails
               view={view}
+              directory={directory}
               hideTitle
               onCheck={() => {
                 setDetailsOpen(false);
@@ -557,7 +576,7 @@ function SimulatedRequestCard({ view, busy, onReject, onShare }: { view: Observe
 
 // ---------------------------------------------------------------------------------------------- details
 
-export function PracticeDetails({ view, inline, hideTitle, onCheck, onReport, disabled }: { view: ObserverSessionView | undefined; inline?: boolean; hideTitle?: boolean; onCheck?: () => void; onReport?: () => void; disabled?: boolean }) {
+export function PracticeDetails({ view, directory, inline, hideTitle, onCheck, onReport, disabled }: { view: ObserverSessionView | undefined; directory?: ReferenceDirectoryResponse; inline?: boolean; hideTitle?: boolean; onCheck?: () => void; onReport?: () => void; disabled?: boolean }) {
   const canCheck = !!view && !view.ended && !view.stopConfirmationPending;
   const paused = view?.stage === "verifying" || view?.stage === "awaiting_final_decision";
   const body = (
@@ -591,6 +610,7 @@ export function PracticeDetails({ view, inline, hideTitle, onCheck, onReport, di
           {paused ? "Open support check" : "Check official support"}
         </button>
       )}
+      {directory && <OfficialContacts directory={directory} onSupport={view && canCheck ? onCheck : undefined} supportLabel={paused ? "Open support check" : "Contact official support"} disabled={disabled && !paused} />}
       <div className={s.noteCard}>
         <h3 className={s.cardTitle}>
           <ClipboardList size={18} className={s.iconAccent} aria-hidden />
@@ -608,6 +628,35 @@ export function PracticeDetails({ view, inline, hideTitle, onCheck, onReport, di
   );
   if (inline) return <aside className={s.details} data-inline aria-label="Practice details">{body}</aside>;
   return <div className={s.stack}>{body}</div>;
+}
+
+/**
+ * Trusted lookup: contacts come from the app's directory, never from the sender. Display-only fictional
+ * labels (no links, no dialing). Using the official-support entry opens the in-app check; reading the
+ * directory is not itself verification.
+ */
+function OfficialContacts({ directory, onSupport, supportLabel, disabled }: { directory: ReferenceDirectoryResponse; onSupport?: () => void; supportLabel: string; disabled?: boolean }) {
+  return (
+    <section className={s.stack} aria-label="Official contacts">
+      <h3 className={s.cardTitle}>Official contacts</h3>
+      <p className={`${s.muted} ${s.small}`}>From the app&apos;s directory of the fictional {directory.organization.displayName}. Not real addresses.</p>
+      <ul className={s.list}>
+        {directory.directory.map((e) => (
+          <li key={e.id} className={s.listItem}>
+            <span className={s.stack}>
+              <strong>{e.label}</strong>
+              <span className={`${s.muted} ${s.small}`}>{[e.websiteDisplay, e.emailDisplay, e.phoneDisplay].filter(Boolean).join(" · ")}</span>
+            </span>
+            {e.destinationAction === "open_official_support_check" && onSupport && (
+              <button type="button" className={s.button} data-variant="secondary" onClick={onSupport} disabled={disabled}>
+                {supportLabel}
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
 }
 
 // ---------------------------------------------------------------------------------------------- verification
