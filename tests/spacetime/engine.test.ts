@@ -23,6 +23,7 @@ function serviceWith(backend: SpacetimeBackend, tools = false) {
     policy: "consequential_and_flagged",
     timeoutMs: 5000,
     planning: { models: () => ({ planner: new FixturePlannerModel(), actor: new FixtureActorModel() }), timeoutMs: 5000, ...(tools ? { toolPlanner: () => new FixtureToolPlannerModel() } : {}) },
+    enabledScenarios: ["mobile-code-01", "mobile-notice-01"],
   });
 }
 
@@ -41,7 +42,7 @@ describe.skipIf(!config)("SpacetimeDB training module (live local server)", () =
 
   it("full practice: planner tool creates a request in the module; verification → final decision → report; outcome and progress recorded once", async () => {
     const before = await progress();
-    const { session } = await service.createSession(OWNER);
+    const { session } = await service.createSession(OWNER, { scenarioId: "mobile-code-01" });
     const id = session.sessionId;
     expect(session.messages[0].content).toMatch(/Avery from Cedar Account Support/);
 
@@ -78,7 +79,7 @@ describe.skipIf(!config)("SpacetimeDB training module (live local server)", () =
   });
 
   it("explicit request action is the only path to simulated exposure; chat 'I accept' does not submit", async () => {
-    const id = (await service.createSession(OWNER)).session.sessionId;
+    const id = (await service.createSession(OWNER, { scenarioId: "mobile-code-01" })).session.sessionId;
     const v = (await say(id, "Sure, go on.")).session;
     const request = v.requests.at(-1)!;
     const accepted = (await say(id, "I accept")).session;
@@ -89,7 +90,7 @@ describe.skipIf(!config)("SpacetimeDB training module (live local server)", () =
   });
 
   it("repeated message / event idempotency keys do not duplicate state", async () => {
-    const id = (await service.createSession(OWNER)).session.sessionId;
+    const id = (await service.createSession(OWNER, { scenarioId: "mobile-code-01" })).session.sessionId;
     const key = randomUUID();
     const first = await say(id, "Who are you?", key);
     const again = await say(id, "Who are you?", key);
@@ -99,7 +100,7 @@ describe.skipIf(!config)("SpacetimeDB training module (live local server)", () =
   });
 
   it("commit guards run in the module: wrong claim, stale revision and a forged candidate are all rejected without a message", async () => {
-    const id = (await service.createSession(OWNER)).session.sessionId;
+    const id = (await service.createSession(OWNER, { scenarioId: "mobile-code-01" })).session.sessionId;
     await say(id, "Who are you?");
     const snapshot = (await backend.load(id))!;
     const committed = snapshot.plans.find((p) => p.status === "committed")!;
@@ -116,7 +117,7 @@ describe.skipIf(!config)("SpacetimeDB training module (live local server)", () =
   });
 
   it("stop during the turn: a later commit for the old revision is discarded", async () => {
-    const id = (await service.createSession(OWNER)).session.sessionId;
+    const id = (await service.createSession(OWNER, { scenarioId: "mobile-code-01" })).session.sessionId;
     await say(id, "Who are you?");
     const snapshot = (await backend.load(id))!;
     const plan = { ...snapshot.plans.find((p) => p.status === "committed")!, id: `plan-${randomUUID()}`, status: "prepared" as const, committedMessageId: null, basedOnRevision: snapshot.session.revision };
@@ -130,7 +131,7 @@ describe.skipIf(!config)("SpacetimeDB training module (live local server)", () =
   });
 
   it("an unauthorized identity cannot create sessions, commit, or read another owner's session", async () => {
-    const id = (await service.createSession(OWNER)).session.sessionId;
+    const id = (await service.createSession(OWNER, { scenarioId: "mobile-code-01" })).session.sessionId;
     const { token } = (await (await fetch(`${config!.url}/v1/identity`, { method: "POST" })).json()) as { token: string };
     const intruder = new SpacetimeBackend({ ...config!, token });
     await expect(intruder.createSession("anon:intruder")).rejects.toThrow(/unauthorized/);
@@ -142,7 +143,7 @@ describe.skipIf(!config)("SpacetimeDB training module (live local server)", () =
 
   it("tool-calling planner: execute_training_move creates the request through the module's atomic commit", async () => {
     const tools = serviceWith(backend, true);
-    const id = (await tools.createSession(OWNER)).session.sessionId;
+    const id = (await tools.createSession(OWNER, { scenarioId: "mobile-code-01" })).session.sessionId;
     const v = (await tools.submitMessage(OWNER, id, { idempotencyKey: randomUUID(), content: "Sure, go on." })).session;
     expect(v.requestStatus).toBe("pending");
     const record = (await backend.load(id))!.plans.find((p) => p.status === "committed")!;
@@ -153,12 +154,34 @@ describe.skipIf(!config)("SpacetimeDB training module (live local server)", () =
 
   it("history and progress come from the module, owner-scoped", async () => {
     const other = `anon:spacetime-other-${randomUUID()}`;
-    const mine = (await service.createSession(OWNER)).session.sessionId;
+    const mine = (await service.createSession(OWNER, { scenarioId: "mobile-code-01" })).session.sessionId;
     await service.createSession(other);
     const list = await service.history(OWNER, 50, undefined);
     expect(list.sessions.some((s) => s.sessionId === mine)).toBe(true);
     expect((await service.history(other, 50, undefined)).sessions.some((s) => s.sessionId === mine)).toBe(false);
     expect((await service.progress(OWNER)).completed).toBeGreaterThanOrEqual(1);
+  });
+
+  it("legitimate notice in the module: verify → proceed → review = legitimate_task_completed; progress counts it", async () => {
+    const before = ((await backend.progress(OWNER)).value ?? {}) as Record<string, number>;
+    const id = (await service.createSession(OWNER, { scenarioId: "mobile-notice-01" })).session.sessionId;
+    const start = await act(id, "official_verification_started");
+    expect(start.session.verification.officialResult).toMatch(/monthly-statement notice was issued/);
+    await act(id, "official_verification_completed", { challengeId: start.challengeId });
+    await act(id, "final_decision_proceed");
+    await act(id, "portal_record_opened", { recordId: "monthly-statement-demo" });
+    const done = (await act(id, "portal_notice_reviewed", { recordId: "monthly-statement-demo" })).session;
+    expect(done.outcome).toBe("legitimate_task_completed");
+    const after = ((await backend.progress(OWNER)).value ?? {}) as Record<string, number>;
+    expect(after.legitimateTaskCompleted).toBe((before.legitimateTaskCompleted ?? 0) + 1);
+  });
+
+  it("module selection: recommended chooses the scenario the owner has not completed", async () => {
+    const fresh = `anon:spacetime-select-${randomUUID()}`;
+    const first = (await service.createSession(fresh, { scenarioId: "mobile-code-01" })).session.sessionId;
+    await service.submitEvent(fresh, first, { idempotencyKey: randomUUID(), type: "conversation_ended", requestId: null });
+    const next = (await service.createSession(fresh, { selection: "recommended" })).session;
+    expect(next.messages[0].content).toMatch(/new monthly statement/);
   });
 
   it("SpacetimeDB is essential: when it is unreachable no training transition happens (no Postgres fallback)", async () => {

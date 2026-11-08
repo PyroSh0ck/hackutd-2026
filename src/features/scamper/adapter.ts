@@ -1,7 +1,7 @@
 "use client";
 
 import { ObserverSessionResponseSchema, type ClientEventType, type ObserverSessionResponse, type ObserverSessionView } from "@/contracts/observer";
-import { HistoryResponseSchema, ProgressResponseSchema } from "@/contracts/history";
+import { AccountResponseSchema, HistoryResponseSchema, ProgressResponseSchema } from "@/contracts/history";
 import { ReferenceDirectoryResponseSchema } from "@/contracts/reference";
 import { apiRequest } from "@/lib/api-client";
 
@@ -17,7 +17,7 @@ import { apiRequest } from "@/lib/api-client";
 const base = "/api/observer/sessions";
 const key = () => crypto.randomUUID();
 
-export type EventExtra = { requestId?: string | null; challengeId?: string; practiceCode?: string; linkedIssueId?: string };
+export type EventExtra = { requestId?: string | null; challengeId?: string; practiceCode?: string; linkedIssueId?: string; recordId?: string };
 
 export const scamperApi = {
   start: () => apiRequest(base, ObserverSessionResponseSchema, { method: "POST" }),
@@ -34,10 +34,12 @@ export const scamperApi = {
         ...(extra.challengeId ? { challengeId: extra.challengeId } : {}),
         ...(extra.practiceCode ? { practiceCode: extra.practiceCode } : {}),
         ...(extra.linkedIssueId ? { linkedIssueId: extra.linkedIssueId } : {}),
+        ...(extra.recordId ? { recordId: extra.recordId } : {}),
       },
     }),
   history: (cursor?: string) => apiRequest(`${base}?limit=20${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, HistoryResponseSchema),
   progress: () => apiRequest("/api/observer/progress", ProgressResponseSchema),
+  account: (id: string) => apiRequest(`${base}/${id}/account`, AccountResponseSchema),
   directory: () => apiRequest("/api/observer/reference-directory", ReferenceDirectoryResponseSchema),
   retry: (id: string) => apiRequest(`${base}/${id}/retry`, ObserverSessionResponseSchema, { method: "POST", body: { idempotencyKey: key() } }),
 };

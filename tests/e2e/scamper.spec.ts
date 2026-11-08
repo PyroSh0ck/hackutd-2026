@@ -118,3 +118,26 @@ test("mobile: no horizontal overflow; practice details and menu are reachable", 
   await page.getByRole("button", { name: "Open menu" }).click();
   await expect(page.getByRole("link", { name: "Resources" })).toBeVisible();
 });
+
+test("B06 (browser): verification resumes after a page reload without restarting the check", async ({ page }) => {
+  await begin(page);
+  await page.getByRole("button", { name: "Check official support" }).click();
+  await page.getByRole("dialog", { name: "Official support check" }).getByRole("button", { name: "Run check" }).click();
+  await expect(page.getByRole("dialog", { name: "Official support check" })).toContainText(/not initiated by Cedar Mobile/);
+  await page.reload();
+  const dialog = page.getByRole("dialog", { name: "Official support check" });
+  await expect(dialog).toContainText(/not initiated by Cedar Mobile/);
+  await dialog.getByRole("button", { name: "I have read this result" }).click();
+  await expect(dialog.getByRole("heading", { name: "Your decision" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Report / block and end" }).click();
+  await expect(dialog).toContainText("Defense demonstrated");
+});
+
+test("B20: history is server-side; it survives clearing browser storage while the player cookie persists", async ({ page }) => {
+  await begin(page);
+  await page.getByRole("button", { name: "End practice" }).click();
+  await expect(page.getByText("Safely disengaged").first()).toBeVisible();
+  await page.evaluate(() => window.localStorage.clear());
+  await page.goto("/scamper/history");
+  await expect(page.getByText("Safely disengaged").filter({ visible: true }).first()).toBeVisible();
+});

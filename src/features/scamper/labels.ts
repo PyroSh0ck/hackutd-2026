@@ -23,6 +23,8 @@ export const ACTION_LABEL: Partial<Record<AppEventType, string>> = {
   conversation_reported: "Reported and blocked the sender",
   conversation_ended: "Ended the practice",
   stop_confirmation_dismissed: "Chose to keep practicing",
+  portal_record_opened: "Opened the trusted account portal",
+  portal_notice_reviewed: "Marked the account notice reviewed",
 };
 
 export const time = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });

@@ -114,7 +114,10 @@ export class StoreBackend implements TrainingBackend {
     let scenario = this.deps.scenario;
     if (choice) {
       const enabled = choice.enabled.map((sid) => scenarioById(sid, latestVersion(sid), [this.deps.scenario])).filter((s): s is ScenarioDefinition => s !== null);
-      scenario = choice.scenarioId ? (enabled.find((s) => s.id === choice.scenarioId) ?? fail(`Scenario ${choice.scenarioId} is not enabled.`)) : selectScenario(choice.selection, enabled, await this.store.listSessions(ownerKey), random);
+      // The explicit override is already test/admin-gated by the caller: any registered scenario.
+      scenario = choice.scenarioId
+        ? (scenarioById(choice.scenarioId, latestVersion(choice.scenarioId), [this.deps.scenario]) ?? fail(`Unknown scenario ${choice.scenarioId}.`))
+        : selectScenario(choice.selection, enabled, await this.store.listSessions(ownerKey), random);
     }
     const { session, change } = decideCreate({ ...this.env(), scenario }, ownerKey, id, this.deps.newId(), random);
     await this.store.createSession(session, change);

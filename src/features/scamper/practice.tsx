@@ -5,6 +5,7 @@ import { AlertDialog, Dialog } from "radix-ui";
 import { ArrowDown, ClipboardList, ExternalLink, Flag, PanelRight, SendHorizontal, ShieldCheck, User, X } from "lucide-react";
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { ClientEventType, Message, ObserverSessionView } from "@/contracts/observer";
+import type { AccountResponse } from "@/contracts/history";
 import type { ReferenceDirectoryResponse } from "@/contracts/reference";
 import { errorMessage } from "@/lib/api-client";
 import { newer, scamperApi, sessionIndex, type EventExtra } from "./adapter";
@@ -148,6 +149,7 @@ function ActivePractice({ initial, onRestart, restarting, restartError }: { init
   const [challengeId, setChallengeId] = useState<string>();
   const [verifyOpen, setVerifyOpen] = useState(initial.stage === "verifying" || initial.stage === "awaiting_final_decision");
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
   const sendLock = useRef(false);
   const actLock = useRef(false);
   const id = view.sessionId;
@@ -212,7 +214,11 @@ function ActivePractice({ initial, onRestart, restarting, restartError }: { init
   const openCheck = () => setVerifyOpen(true);
 
   const directory = useDirectory();
-  const details = <PracticeDetails view={view} directory={directory} onCheck={openCheck} onReport={report} disabled={busy} />;
+  const openAccount = () => {
+    setAccountOpen(true);
+    void act("portal_record_opened", { recordId: "account-home" });
+  };
+  const details = <PracticeDetails view={view} directory={directory} onCheck={openCheck} onAccount={openAccount} onReport={report} disabled={busy} />;
 
   return (
     <div className={s.workspace}>
@@ -283,6 +289,10 @@ function ActivePractice({ initial, onRestart, restarting, restartError }: { init
             <PracticeDetails
               view={view}
               directory={directory}
+              onAccount={() => {
+                setDetailsOpen(false);
+                openAccount();
+              }}
               hideTitle
               onCheck={() => {
                 setDetailsOpen(false);
@@ -294,6 +304,15 @@ function ActivePractice({ initial, onRestart, restarting, restartError }: { init
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
+
+      <AccountDialog
+        open={accountOpen}
+        onOpenChange={setAccountOpen}
+        view={view}
+        busy={busy}
+        onOpenNotice={(recordId) => act("portal_record_opened", { recordId })}
+        onReview={(recordId) => act("portal_notice_reviewed", { recordId })}
+      />
 
       <VerificationDialog
         open={verifyOpen}
@@ -575,7 +594,7 @@ function SimulatedRequestCard({ view, busy, onReject, onShare }: { view: Observe
 
 // ---------------------------------------------------------------------------------------------- details
 
-export function PracticeDetails({ view, directory, inline, hideTitle, onCheck, onReport, disabled }: { view: ObserverSessionView | undefined; directory?: ReferenceDirectoryResponse; inline?: boolean; hideTitle?: boolean; onCheck?: () => void; onReport?: () => void; disabled?: boolean }) {
+export function PracticeDetails({ view, directory, inline, hideTitle, onCheck, onAccount, onReport, disabled }: { view: ObserverSessionView | undefined; directory?: ReferenceDirectoryResponse; inline?: boolean; hideTitle?: boolean; onCheck?: () => void; onAccount?: () => void; onReport?: () => void; disabled?: boolean }) {
   const canCheck = !!view && !view.ended && !view.stopConfirmationPending;
   const paused = view?.stage === "verifying" || view?.stage === "awaiting_final_decision";
   const body = (
@@ -609,7 +628,15 @@ export function PracticeDetails({ view, directory, inline, hideTitle, onCheck, o
           {paused ? "Open support check" : "Check official support"}
         </button>
       )}
-      {directory && <OfficialContacts directory={directory} onSupport={view && canCheck ? onCheck : undefined} supportLabel={paused ? "Open support check" : "Contact official support"} disabled={disabled && !paused} />}
+      {directory && (
+        <OfficialContacts
+          directory={directory}
+          onSupport={view && canCheck ? onCheck : undefined}
+          onAccount={view && !view.ended && view.stage !== "verifying" ? onAccount : undefined}
+          supportLabel={paused ? "Open support check" : "Contact official support"}
+          disabled={disabled && !paused}
+        />
+      )}
       <div className={s.noteCard}>
         <h3 className={s.cardTitle}>
           <ClipboardList size={18} className={s.iconAccent} aria-hidden />
@@ -634,7 +661,7 @@ export function PracticeDetails({ view, directory, inline, hideTitle, onCheck, o
  * labels (no links, no dialing). Using the official-support entry opens the in-app check; reading the
  * directory is not itself verification.
  */
-function OfficialContacts({ directory, onSupport, supportLabel, disabled }: { directory: ReferenceDirectoryResponse; onSupport?: () => void; supportLabel: string; disabled?: boolean }) {
+function OfficialContacts({ directory, onSupport, onAccount, supportLabel, disabled }: { directory: ReferenceDirectoryResponse; onSupport?: () => void; onAccount?: () => void; supportLabel: string; disabled?: boolean }) {
   return (
     <section className={s.stack} aria-label="Official contacts">
       <h3 className={s.cardTitle}>Official contacts</h3>
@@ -651,10 +678,97 @@ function OfficialContacts({ directory, onSupport, supportLabel, disabled }: { di
                 {supportLabel}
               </button>
             )}
+            {e.destinationAction === "open_simulated_account" && onAccount && (
+              <button type="button" className={s.button} data-variant="secondary" onClick={onAccount} disabled={disabled}>
+                Open account portal
+              </button>
+            )}
           </li>
         ))}
       </ul>
     </section>
+  );
+}
+
+/**
+ * The trusted in-app account portal (fictional). It shows only what the server says exists for this
+ * session; opening a notice and marking it reviewed are separate, server-validated events.
+ */
+function AccountDialog(p: { open: boolean; onOpenChange: (o: boolean) => void; view: ObserverSessionView; busy: boolean; onOpenNotice: (id: string) => Promise<void>; onReview: (id: string) => Promise<void> }) {
+  const [account, setAccount] = useState<AccountResponse>();
+  const [error, setError] = useState<string>();
+  const sessionId = p.view.sessionId;
+  const revision = p.view.revision;
+  useEffect(() => {
+    if (!p.open) return;
+    let alive = true;
+    scamperApi.account(sessionId).then(
+      (a) => alive && setAccount(a),
+      (e) => alive && setError(errorMessage(e, "The account could not be loaded.")),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [p.open, sessionId, revision]);
+  const locked = p.view.ended || p.view.stage === "verifying";
+  return (
+    <Dialog.Root open={p.open} onOpenChange={p.onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Overlay className={s.overlay} />
+        <Dialog.Content className={s.dialog}>
+          <div className={s.dialogHead}>
+            <Dialog.Title className={s.dialogTitle}>Account portal</Dialog.Title>
+            <Dialog.Close className={s.iconButton} aria-label="Close account portal">
+              <X size={18} aria-hidden />
+            </Dialog.Close>
+          </div>
+          <div className={s.officialBanner}>
+            <ShieldCheck size={18} aria-hidden />
+            Opened from the app&apos;s directory, not from a link in the conversation.
+          </div>
+          <Dialog.Description className={s.muted}>A fictional practice account. Nothing here is real.</Dialog.Description>
+          {error && <InlineError message={error} />}
+          {account && (
+            <>
+              <dl className={s.facts}>
+                <dt>Account</dt>
+                <dd>{account.profile.accountLabel}</dd>
+                <dt>Name</dt>
+                <dd>{account.profile.displayName}</dd>
+                <dt>Line</dt>
+                <dd>Ending {account.profile.lineSuffix}</dd>
+              </dl>
+              <h3 className={s.subtitle}>Notices</h3>
+              {account.notices.length === 0 ? (
+                <p className={s.muted}>There are no notices on this account.</p>
+              ) : (
+                <ul className={s.list}>
+                  {account.notices.map((n) => (
+                    <li key={n.id} className={s.evidence}>
+                      <strong>{n.title}</strong>
+                      {n.summary ? <p>{n.summary}</p> : null}
+                      <div className={s.row}>
+                        {!n.opened && (
+                          <button type="button" className={s.button} data-variant="secondary" disabled={p.busy || locked} onClick={() => void p.onOpenNotice(n.id)}>
+                            Open notice
+                          </button>
+                        )}
+                        {n.opened && !n.reviewed && (
+                          <button type="button" className={s.button} disabled={p.busy || locked} onClick={() => void p.onReview(n.id)}>
+                            {n.actionLabel}
+                          </button>
+                        )}
+                        {n.reviewed && <Badge tone="success">Reviewed</Badge>}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 
@@ -759,12 +873,12 @@ function FinalDecisionControls({ view, busy, onReport, onProceed, onBack }: { vi
             Report / block and end
           </button>
           <button type="button" className={s.button} data-variant="secondary" onClick={onProceed} disabled={busy}>
-            Proceed with the request (simulated)
+            Proceed (simulated)
           </button>
         </div>
       ) : (
         <>
-          <p>You chose to proceed. Use the simulated request card in the conversation to share the fictional code, or report instead.</p>
+          <p>You chose to proceed. Continue in the conversation or the account portal, or report instead.</p>
           <div className={s.row}>
             <button type="button" className={s.button} data-variant="secondary" onClick={onBack}>
               Back to the request card

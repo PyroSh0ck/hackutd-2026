@@ -435,9 +435,10 @@ export const startSession = spacetimedb.procedure(
     if (selection !== 'mixed' && selection !== 'recommended') return invalid('selection must be mixed or recommended');
     const latest = (id: string) => SCENARIOS.filter((s) => s.id === id).sort((a, b) => b.version - a.version)[0] ?? null;
     const scenarios = enabled.split(',').map((id) => latest(id.trim())).filter((s): s is ScenarioDefinition => s !== null);
-    if (!scenarios.length) return invalid('no enabled scenario is known to this module');
-    const forced = scenarioId ? scenarios.find((s) => s.id === scenarioId) : undefined;
-    if (scenarioId && !forced) return invalid(`scenario ${scenarioId} is not enabled`);
+    if (!scenarios.length && !scenarioId) return invalid('no enabled scenario is known to this module');
+    // The explicit override is test/admin-gated by the calling app: any scenario this module knows.
+    const forced = scenarioId ? (latest(scenarioId) ?? undefined) : undefined;
+    if (scenarioId && !forced) return invalid(`unknown scenario ${scenarioId}`);
     const scenario = forced ?? selectScenario(selection, scenarios, ownerSummaries(tx, ownerKey), () => tx.random());
     const env = { ...envOf(tx), scenario };
     const data = cmdCreate(env, ownerKey, uuid(tx), uuid(tx), () => tx.random());

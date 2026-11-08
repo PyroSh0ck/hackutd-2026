@@ -54,6 +54,8 @@ export default defineConfig({
       // Deterministic, labeled observer model for HTTP plumbing tests (requires E2E_TEST=1 as well).
       OBSERVER_MODEL_MODE: "fixture",
       AGENT_DEBUG: "1",
+      // Existing suites assume the fraud scenario; legitimate-scenario specs create sessions explicitly (test-gated).
+      PRACTICE_SCENARIOS: process.env.PRACTICE_SCENARIOS ?? "mobile-code-01",
       // Optional: run the same suites with SpacetimeDB as the training authority / the tool-calling planner.
       ...(process.env.TRAINING_BACKEND ? { TRAINING_BACKEND: process.env.TRAINING_BACKEND } : {}),
       ...(process.env.PLANNER_PROTOCOL ? { PLANNER_PROTOCOL: process.env.PLANNER_PROTOCOL } : {}),

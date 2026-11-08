@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import "server-only";
 
 import type { z } from "zod";
@@ -113,6 +114,8 @@ export function playerRoute<P = Record<string, never>>(
   handler: (args: PlayerRouteArgs<P>) => Promise<RouteResult>,
 ) {
   return async (request: Request, context?: { params?: Promise<P> }): Promise<Response> => {
+    // Player routes are per-request (signed cookie): never prerender them at build (Cache Components).
+    await connection();
     const ctx = createRequestContext(request, route);
     let setCookie: string | null = null;
     const withCookie = (init: Record<string, string>) => (setCookie ? { ...init, "Set-Cookie": setCookie } : init);
